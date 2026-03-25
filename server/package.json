@@ -1,0 +1,18 @@
+{
+  "name": "claude-photo-ai-server",
+  "version": "1.0.0",
+  "description": "Serveur intermédiaire pour le plugin Lightroom Claude Photo AI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_api.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["lightroom", "claude", "anthropic", "photography", "xmp"],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {}
+}

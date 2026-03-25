@@ -1,0 +1,262 @@
+# 🤖 Claude Photo AI — Plugin Lightroom Classic
+
+Développez vos photos avec l'intelligence artificielle : décrivez en langage naturel les modifications souhaitées, et Claude analyse votre photo puis génère automatiquement les réglages Lightroom.
+
+---
+
+## 📁 Structure des fichiers
+
+```
+ClaudePhoto.lrplugin/        ← Dossier du plugin (à installer dans Lightroom)
+├── Info.lua                 ← Manifeste du plugin (version, menus)
+└── ClaudePhotoMain.lua      ← Code principal (UI + workflow)
+
+server/                      ← Serveur intermédiaire Node.js
+├── server.js                ← Serveur HTTP local (pont vers l'API Claude)
+├── test_api.js              ← Script de test
+└── package.json             ← Dépendances (aucune ! Node.js standard seulement)
+```
+
+---
+
+## ⚙️ Prérequis
+
+- **Lightroom Classic** 6.0 ou supérieur (CC ou version perpétuelle)
+- **Node.js** 16+ (https://nodejs.org) — pour le serveur intermédiaire
+- **Clé API Anthropic** — https://console.anthropic.com
+
+---
+
+## 🚀 Installation
+
+### Étape 1 : Démarrer le serveur local
+
+```bash
+# Terminal — à laisser ouvert pendant que vous utilisez Lightroom
+
+# Avec votre clé API en variable d'environnement (recommandé)
+cd server/
+ANTHROPIC_API_KEY=sk-ant-votre-cle-ici node server.js
+
+# Windows
+set ANTHROPIC_API_KEY=sk-ant-votre-cle-ici
+node server.js
+
+# Vérifier que ça fonctionne
+curl http://localhost:3000/health
+```
+
+### Étape 2 : Installer le plugin dans Lightroom
+
+1. Ouvrez Lightroom Classic
+2. Menu **Fichier → Gestionnaire de modules externes**
+3. Cliquez **Ajouter**
+4. Naviguez jusqu'au dossier `ClaudePhoto.lrplugin` et sélectionnez-le
+5. Cliquez **Ajouter le module externe**
+6. Le plugin apparaît dans la liste — vérifiez qu'il est **activé** (coche verte)
+7. Cliquez **Terminé**
+
+### Étape 3 : Utiliser le plugin
+
+1. Dans Lightroom, **sélectionnez une ou plusieurs photos** dans la Bibliothèque
+2. Menu **Bibliothèque → Plugins → Développer avec Claude AI**
+3. Entrez vos instructions en français (ou toute langue)
+4. Cliquez **Analyser et Développer**
+5. Les réglages sont appliqués automatiquement !
+
+---
+
+## 💬 Exemples de prompts
+
+### Portraits
+```
+Rends ce portrait plus flatteur : peaux douces et naturelles, yeux très nets,
+fond légèrement désaturé pour faire ressortir le sujet
+```
+
+### Paysages
+```
+Dramatise ce paysage : ciel très contrasté, récupère les détails dans les ombres,
+sature légèrement les verts et les bleus, clarté maximale
+```
+
+### Style cinématique
+```
+Style film cinématographique : désature légèrement, refroidis les ombres vers 
+le bleu/teal, réchauffe les hautes lumières vers l'orange, contraste doux
+```
+
+### Correction technique
+```
+Cette photo est surexposée d'environ 1.5 stops. Récupère les hautes lumières,
+compense les ombres, et rétablis un blanc correct
+```
+
+### Noir et blanc
+```
+Convertis en noir et blanc expressif style Ansel Adams : ciel très sombre 
+(filtre rouge simulé), peaux lumineuses, contraste élevé, forte clarté
+```
+
+### Ambiance vintage
+```
+Style photo vintage années 70 : vignettage prononcé, grain visible, 
+tons chauds légèrement délavés, ombres remontées
+```
+
+---
+
+## 🔧 Configuration avancée
+
+### Mode API directe (sans serveur)
+
+Si vous ne voulez pas démarrer un serveur Node.js, vous pouvez configurer le plugin en mode "API directe" :
+
+1. Dans la boîte de dialogue du plugin, cliquez **⚙ Configuration avancée**
+2. Sélectionnez **API directe**
+3. Entrez votre clé API Anthropic
+4. La clé est sauvegardée dans les préférences Lightroom
+
+> ⚠️ Note : Lightroom Classic a des limitations sur les requêtes HTTP très volumineuses. 
+> Pour les photos haute résolution, le serveur Node.js est recommandé.
+
+### Changer le port du serveur
+
+```bash
+PORT=3001 ANTHROPIC_API_KEY=sk-ant-... node server.js
+```
+
+Puis dans le plugin : Configuration avancée → URL serveur → `http://localhost:3001`
+
+### Logs du serveur
+
+Les logs sont écrits dans `server/claude_photo_server.log`
+
+---
+
+## 🧪 Tester sans Lightroom
+
+Testez le serveur et l'API directement :
+
+```bash
+cd server/
+
+# Test avec une image réelle
+node test_api.js /path/to/photo.jpg "Style cinématique désaturé"
+
+# Test basique (sans photo)
+node test_api.js
+
+# Test via curl
+curl -X POST http://localhost:3000/analyze-file \
+  -H "Content-Type: application/json" \
+  -d '{"imagePath": "/Users/vous/photo.jpg", "prompt": "Optimise cette photo"}'
+```
+
+---
+
+## 📋 Format XMP généré
+
+Claude génère des fichiers XMP Adobe Camera Raw compatibles avec Lightroom Classic 6+. Exemple de sortie :
+
+```xml
+<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+<rdf:Description rdf:about=''
+  xmlns:crs='http://ns.adobe.com/camera-raw-settings/1.0/'
+  crs:Version='14.4'
+  crs:ProcessVersion='11.0'
+  crs:WhiteBalance='Custom'
+  crs:Temperature="5500"
+  crs:Tint="5"
+  crs:Exposure2012="-0.50"
+  crs:Contrast2012="25"
+  crs:Highlights2012="-40"
+  crs:Shadows2012="20"
+  crs:Whites2012="-10"
+  crs:Blacks2012="-15"
+  crs:Clarity2012="15"
+  crs:Vibrance="10"
+  crs:Saturation="5"
+/>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>
+```
+
+Vous pouvez aussi **glisser-déposer ce fichier .xmp directement dans Lightroom** ou l'appliquer manuellement via Développement → Copier les réglages.
+
+---
+
+## 🔍 Dépannage
+
+### "Impossible de contacter le serveur"
+→ Vérifiez que `node server.js` est bien en cours d'exécution
+→ Testez : `curl http://localhost:3000/health`
+
+### "Clé API manquante"
+→ Définissez `ANTHROPIC_API_KEY` avant de lancer le serveur
+→ Ou utilisez le mode API directe dans la configuration du plugin
+
+### "Le XMP généré ne contient aucun paramètre"
+→ Vérifiez votre clé API sur console.anthropic.com
+→ Assurez-vous d'avoir du crédit disponible
+→ Consultez les logs : `server/claude_photo_server.log`
+
+### "Export JPEG échoué"
+→ Vérifiez que Lightroom a accès en écriture au dossier temp
+→ Essayez de réexporter manuellement la photo en JPEG
+
+### Le plugin n'apparaît pas dans le menu
+→ Rechargez les plugins : Fichier → Gestionnaire de modules → Recharger les modules
+
+---
+
+## 🏗️ Architecture technique
+
+```
+Lightroom Classic (Lua)
+    │
+    ├── Sélection photo(s)
+    ├── Export JPEG temporaire (redimensionné max 1568px)  
+    ├── Encodage base64
+    ├── Requête HTTP POST → localhost:3000/analyze
+    │
+    ▼
+Serveur Node.js (server.js)
+    │
+    ├── Reçoit { image: "base64...", prompt: "..." }
+    ├── Construit le message Claude (vision + texte)
+    ├── POST → api.anthropic.com/v1/messages
+    │
+    ▼
+Claude API (claude-opus-4-5)
+    │
+    ├── Analyse l'image
+    ├── Comprend les instructions
+    ├── Génère le XMP avec les réglages appropriés
+    │
+    ▼
+Serveur Node.js
+    │
+    ├── Valide le XMP
+    ├── Retourne le contenu XMP au plugin
+    │
+    ▼
+Lightroom Classic
+    ├── Parse le XMP
+    ├── Applique les paramètres au développement
+    └── Affiche les réglages dans le panneau Développement
+```
+
+---
+
+## 📝 Licence
+
+MIT — Libre d'utilisation et de modification.
+Clé API Anthropic requise (tarification à l'usage sur console.anthropic.com).
+
+---
+
+*Développé avec Claude Opus — Anthropic*
