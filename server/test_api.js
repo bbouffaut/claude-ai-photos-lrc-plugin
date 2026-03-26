@@ -1,187 +1,110 @@
 #!/usr/bin/env node
 /**
- * test_api.js — Script de test du serveur Claude Photo AI
- * 
+ * test_api.js v2 — Test des trois modes du serveur Claude Photo AI
+ *
  * Usage :
- *   node test_api.js                          # Test basique (image de placeholder)
- *   node test_api.js /path/to/photo.jpg       # Test avec votre photo
- *   node test_api.js /path/to/photo.jpg "Style cinématique désaturé"
+ *   node test_api.js                                         # health check uniquement
+ *   node test_api.js prompt   photo.jpg "Style cinématique"
+ *   node test_api.js reference photo.jpg modele.jpg
+ *   node test_api.js both      photo.jpg modele.jpg "Ajoute plus de grain"
  */
 
-const https = require('https');
-const http  = require('http');
-const fs    = require('fs');
-const path  = require('path');
+const http = require('http');
+const fs   = require('fs');
+const path = require('path');
 
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
-const API_KEY    = process.env.ANTHROPIC_API_KEY || '';
+const SERVER = process.env.SERVER_URL || 'http://localhost:3000';
+const MODE   = process.argv[2] || 'health';
+const IMG    = process.argv[3];
+const ARG4   = process.argv[4];
+const ARG5   = process.argv[5];
 
-// Image JPEG minimale 1x1 pixel pour les tests sans photo réelle
-const PLACEHOLDER_JPEG_BASE64 = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8AJQAB/9k=';
-
-async function testHealthCheck() {
-    console.log('🔍 Test 1 : Health check...');
-    
+function request(method, url, body) {
     return new Promise((resolve, reject) => {
-        const url = new URL(SERVER_URL + '/health');
-        const client = url.protocol === 'https:' ? https : http;
-        
-        client.get(SERVER_URL + '/health', (res) => {
-            let data = '';
-            res.on('data', chunk => { data += chunk; });
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(data);
-                    if (json.status === 'ok') {
-                        console.log('   ✅ Serveur en ligne');
-                        console.log(`   📦 Modèle: ${json.model}`);
-                        console.log(`   🔑 Clé API configurée: ${json.hasApiKey ? 'oui' : 'non (à passer via X-API-Key)'}`);
-                        resolve(true);
-                    } else {
-                        console.log('   ❌ Statut inattendu:', json);
-                        resolve(false);
-                    }
-                } catch(e) {
-                    console.log('   ❌ Réponse non-JSON:', data.substring(0, 200));
-                    resolve(false);
-                }
-            });
-        }).on('error', (e) => {
-            console.log(`   ❌ Impossible de contacter le serveur: ${e.message}`);
-            console.log('   → Assurez-vous que le serveur tourne: node server.js');
-            resolve(false);
-        });
-    });
-}
-
-async function testAnalyze(imagePath, prompt) {
-    console.log('\n🤖 Test 2 : Analyse et génération XMP...');
-    
-    let imageBase64;
-    let imageDescription;
-    
-    if (imagePath && fs.existsSync(imagePath)) {
-        console.log(`   📸 Photo: ${imagePath}`);
-        const buffer = fs.readFileSync(imagePath);
-        imageBase64 = buffer.toString('base64');
-        imageDescription = path.basename(imagePath);
-    } else {
-        console.log('   📸 Utilisation d\'une image de test (1x1px)');
-        imageBase64 = PLACEHOLDER_JPEG_BASE64;
-        imageDescription = 'image_test.jpg';
-    }
-    
-    const testPrompt = prompt || 'Optimise légèrement cette photo : améliore le contraste et la clarté, et réchauffe légèrement les tons';
-    console.log(`   💬 Prompt: "${testPrompt}"`);
-    
-    const requestBody = JSON.stringify({
-        image:  imageBase64,
-        prompt: testPrompt,
-    });
-    
-    return new Promise((resolve, reject) => {
-        const urlObj  = new URL(SERVER_URL + '/analyze');
-        const client  = urlObj.protocol === 'https:' ? https : http;
-        
-        const options = {
-            hostname: urlObj.hostname,
-            port:     urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
-            path:     '/analyze',
-            method:   'POST',
-            headers: {
-                'Content-Type':   'application/json',
-                'Content-Length': Buffer.byteLength(requestBody),
-                ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
-            }
+        const u = new URL(url);
+        const opts = {
+            hostname: u.hostname, port: u.port || 80,
+            path: u.pathname, method,
+            headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
         };
-        
-        const req = client.request(options, (res) => {
+        const req = http.request(opts, res => {
             let data = '';
-            res.on('data', chunk => { data += chunk; });
-            res.on('end', () => {
-                if (res.statusCode === 200) {
-                    console.log('   ✅ XMP généré avec succès !');
-                    console.log(`   📄 Taille: ${data.length} caractères`);
-                    
-                    // Analyser le XMP reçu
-                    const params = [];
-                    const regex  = /crs:([A-Za-z0-9]+)="([^"]*)"/g;
-                    let match;
-                    while ((match = regex.exec(data)) !== null) {
-                        // Ignorer les paramètres de métadonnées
-                        if (!['Version', 'ProcessVersion', 'WhiteBalance'].includes(match[1])) {
-                            params.push(`     ${match[1].padEnd(30)} = ${match[2]}`);
-                        }
-                    }
-                    
-                    if (params.length > 0) {
-                        console.log('\n   📊 Paramètres générés par Claude :');
-                        params.forEach(p => console.log(p));
-                    }
-                    
-                    // Sauvegarder le XMP pour inspection
-                    const outputPath = path.join(__dirname, 'test_output_claude.xmp');
-                    fs.writeFileSync(outputPath, data, 'utf8');
-                    console.log(`\n   💾 XMP sauvegardé: ${outputPath}`);
-                    console.log('   → Glissez ce fichier dans Lightroom pour tester !');
-                    
-                    resolve(data);
-                } else {
-                    try {
-                        const error = JSON.parse(data);
-                        console.log(`   ❌ Erreur ${res.statusCode}: ${error.error}`);
-                        if (error.suggestion) {
-                            console.log(`   💡 Suggestion: ${error.suggestion}`);
-                        }
-                    } catch(e) {
-                        console.log(`   ❌ Erreur ${res.statusCode}: ${data.substring(0, 300)}`);
-                    }
-                    resolve(null);
-                }
-            });
+            res.on('data', c => data += c);
+            res.on('end', () => resolve({ status: res.statusCode, body: data }));
         });
-        
-        req.on('error', (e) => {
-            console.log(`   ❌ Erreur: ${e.message}`);
-            resolve(null);
-        });
-        
-        req.setTimeout(130000, () => {
-            req.destroy();
-            console.log('   ❌ Timeout: pas de réponse après 130s');
-            resolve(null);
-        });
-        
-        req.write(requestBody);
+        req.on('error', reject);
+        req.setTimeout(160000, () => { req.destroy(); reject(new Error('Timeout')); });
+        if (body) req.write(body);
         req.end();
     });
 }
 
 async function main() {
     console.log('╔══════════════════════════════════════╗');
-    console.log('║  Claude Photo AI — Test du serveur   ║');
+    console.log('║  Claude Photo AI v2 — Tests          ║');
     console.log('╚══════════════════════════════════════╝\n');
-    
-    const imagePath = process.argv[2];
-    const prompt    = process.argv[3];
-    
-    const serverOk = await testHealthCheck();
-    if (!serverOk) {
-        console.log('\n❌ Tests interrompus : serveur inaccessible');
+
+    // Health check
+    console.log('🔍 Health check...');
+    const h = await request('GET', SERVER + '/health').catch(e => ({ status: 0, body: e.message }));
+    if (h.status === 200) {
+        const j = JSON.parse(h.body);
+        console.log(`   ✅ Serveur OK — modèle: ${j.model} | clé: ${j.hasApiKey ? 'oui' : 'non'}`);
+        console.log(`   Modes: ${j.modes.join(', ')}`);
+    } else {
+        console.log(`   ❌ Serveur inaccessible: ${h.body}`);
         process.exit(1);
     }
-    
-    const xmp = await testAnalyze(imagePath, prompt);
-    
-    if (xmp) {
-        console.log('\n🎉 Tous les tests réussis !');
-        console.log('\nProchaines étapes :');
-        console.log('  1. Installez le plugin dans Lightroom (Fichier → Gestionnaire de plugins)');
-        console.log('  2. Sélectionnez des photos dans Lightroom');
-        console.log('  3. Allez dans Bibliothèque → Plugins → Développer avec Claude AI');
+
+    if (MODE === 'health' || !IMG) {
+        console.log('\n✅ Health check réussi. Lancez avec un mode et des images pour tester.');
+        return;
+    }
+
+    if (!fs.existsSync(IMG)) { console.error('❌ Image introuvable:', IMG); process.exit(1); }
+
+    const imageBase64 = fs.readFileSync(IMG).toString('base64');
+    let   payload     = { image: imageBase64, mode: MODE };
+
+    if (MODE === 'prompt') {
+        payload.prompt = ARG4 || 'Style cinématique désaturé';
+    } else if (MODE === 'reference') {
+        if (!ARG4 || !fs.existsSync(ARG4)) { console.error('❌ Photo modèle introuvable:', ARG4); process.exit(1); }
+        payload.reference = fs.readFileSync(ARG4).toString('base64');
+    } else if (MODE === 'both') {
+        if (!ARG4 || !fs.existsSync(ARG4)) { console.error('❌ Photo modèle introuvable:', ARG4); process.exit(1); }
+        payload.reference = fs.readFileSync(ARG4).toString('base64');
+        payload.prompt    = ARG5 || 'Ajoute un grain subtil et un léger vignettage';
+    }
+
+    console.log(`\n🤖 Test mode "${MODE}"...`);
+    if (payload.prompt)    console.log(`   Prompt    : "${payload.prompt}"`);
+    if (MODE !== 'prompt') console.log(`   Référence : ${Math.round(payload.reference.length/1024)}KB`);
+    console.log(`   Image     : ${Math.round(payload.image.length/1024)}KB`);
+
+    const r = await request('POST', SERVER + '/analyze', JSON.stringify(payload))
+        .catch(e => ({ status: 0, body: e.message }));
+
+    if (r.status === 200) {
+        const params = [...r.body.matchAll(/crs:([A-Za-z0-9]+)="([^"]*)"/g)]
+            .filter(m => !['Version','ProcessVersion','WhiteBalance'].includes(m[1]))
+            .map(m => `   ${m[1].padEnd(30)} = ${m[2]}`);
+
+        console.log(`\n   ✅ XMP généré — ${r.body.length} chars, ${params.length} paramètre(s)`);
+        if (params.length) { console.log('\n   Paramètres :'); params.forEach(p => console.log(p)); }
+
+        const out = path.join(__dirname, `test_${MODE}_output.xmp`);
+        fs.writeFileSync(out, r.body);
+        console.log(`\n   💾 Sauvegardé : ${out}`);
+        console.log('   → Glissez ce .xmp dans Lightroom pour vérifier le résultat !');
     } else {
-        console.log('\n⚠️  Le test d\'analyse a échoué.');
-        console.log('   Vérifiez que votre clé API est correcte : export ANTHROPIC_API_KEY=sk-ant-...');
+        try {
+            const err = JSON.parse(r.body);
+            console.log(`\n   ❌ Erreur ${r.status}: ${err.error}`);
+            if (err.suggestion) console.log(`   💡 ${err.suggestion}`);
+        } catch (_) {
+            console.log(`\n   ❌ Erreur ${r.status}: ${r.body.slice(0, 300)}`);
+        }
     }
 }
 

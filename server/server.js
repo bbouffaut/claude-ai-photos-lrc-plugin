@@ -1,71 +1,76 @@
 /**
- * server.js — Serveur intermédiaire pour le plugin Claude Photo AI
+ * server.js  v2.0 — Serveur Claude Photo AI
  *
- * Ce serveur fait le pont entre le plugin Lightroom (Lua) et l'API Claude.
- * Il est nécessaire car Lightroom ne peut pas faire d'appels HTTPS complexes
- * avec des corps de requête volumineux (images base64).
+ * Nouveauté v2 : supporte une photo modèle en plus du prompt texte.
  *
- * Démarrage : node server.js
- * Ou avec votre clé API : ANTHROPIC_API_KEY=sk-ant-... node server.js
+ * Payload POST /analyze :
+ *   {
+ *     image:     "base64...",          // photo à développer (obligatoire)
+ *     mode:      "prompt"|"reference"|"both",
+ *     prompt:    "instructions...",    // obligatoire si mode=prompt ou mode=both
+ *     reference: "base64...",          // obligatoire si mode=reference ou mode=both
+ *   }
+ *
+ * Démarrage :
+ *   ANTHROPIC_API_KEY=sk-ant-... node server.js
  */
 
-const http     = require('http');
-const https    = require('https');
-const fs       = require('fs');
-const path     = require('path');
-const readline = require('readline');
+const http  = require('http');
+const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 
 // ============================================================
 // Configuration
 // ============================================================
 const CONFIG = {
-    PORT:        process.env.PORT        || 3000,
-    API_KEY:     process.env.ANTHROPIC_API_KEY || '',
-    MODEL:       'claude-opus-4-5',
-    MAX_TOKENS:  2048,
-    LOG_FILE:    path.join(__dirname, 'claude_photo_server.log'),
+    PORT:       process.env.PORT             || 3000,
+    API_KEY:    process.env.ANTHROPIC_API_KEY || '',
+    MODEL:      'claude-sonnet-4-6',
+    MAX_TOKENS: 2048,
+    LOG_FILE:   path.join(__dirname, 'claude_photo_server.log'),
 };
 
 // ============================================================
 // Logger
 // ============================================================
 function log(level, message) {
-    const timestamp = new Date().toISOString();
-    const line = `[${timestamp}] [${level}] ${message}`;
+    const ts   = new Date().toISOString();
+    const line = `[${ts}] [${level}] ${message}`;
     console.log(line);
-    fs.appendFileSync(CONFIG.LOG_FILE, line + '\n', { encoding: 'utf8', flag: 'a' });
+    try { fs.appendFileSync(CONFIG.LOG_FILE, line + '\n'); } catch (_) {}
 }
 
 // ============================================================
-// Prompt système pour Claude
+// Prompt système (commun à tous les modes)
 // ============================================================
-const SYSTEM_PROMPT = `Tu es un expert en post-traitement photographique et en Lightroom Classic.
-
-Ta mission : analyser une photo et les instructions de l'utilisateur, puis générer un fichier XMP Adobe Lightroom valide contenant UNIQUEMENT les ajustements Develop demandés.
+const SYSTEM_PROMPT = `Tu es un expert en post-traitement photographique et en Lightroom Classic / Adobe Camera Raw.
 
 RÈGLES ABSOLUES :
-1. Réponds UNIQUEMENT avec le contenu XML du fichier XMP, sans aucun texte avant ou après, pas de backticks, pas d'explications
-2. Le XMP doit être compatible Lightroom Classic 6+ / Adobe Camera Raw
-3. Utilise les paramètres crs: (Camera Raw Settings) avec les plages correctes
-4. N'inclus que les paramètres utiles — pas besoin de lister tous les défauts
-5. Sois précis : de petits ajustements subtils sont souvent préférables aux extrêmes
+1. Réponds UNIQUEMENT avec le contenu XML du fichier XMP — aucun texte avant ou après, pas de backticks
+2. Le XMP doit être compatible Lightroom Classic 6+ (ProcessVersion 11.0)
+3. Utilise exclusivement les paramètres crs: avec les plages ci-dessous
+4. N'inclus que les paramètres effectivement modifiés (pas les valeurs par défaut)
+5. Préfère les ajustements naturels et subtils aux valeurs extrêmes
 
-PLAGES DE VALEURS VALIDES :
-Lumière : Exposure2012 (-5/+5), Contrast2012 (-100/+100), Highlights2012 (-100/+100),
-          Shadows2012 (-100/+100), Whites2012 (-100/+100), Blacks2012 (-100/+100)
-Présence : Clarity2012 (-100/+100), Dehaze (-100/+100), Texture (-100/+100)
-Couleur  : Vibrance (-100/+100), Saturation (-100/+100), Temperature (2000/50000), Tint (-150/+150)
-HSL      : HueAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
-           SaturationAdjustmentRed/... (-100/+100), LuminanceAdjustmentRed/... (-100/+100)
-Détail   : Sharpness (0/150), SharpenRadius (0.5/3.0), SharpenDetail (0/100),
-           LuminanceSmoothing (0/100), ColorNoiseReduction (0/100)
-Courbes  : ParametricShadows (-100/+100), ParametricDarks (-100/+100),
-           ParametricLights (-100/+100), ParametricHighlights (-100/+100)
-Effets   : GrainAmount (0/100), GrainSize (25/100), VignetteAmount (-100/+100)
-Calibration : ShadowTint (-100/+100), RedHue (-100/+100), RedSaturation (-100/+100),
-              GreenHue (-100/+100), GreenSaturation (-100/+100), BlueHue (-100/+100), BlueSaturation (-100/+100)
+PLAGES DE VALEURS :
+Exposition  : Exposure2012 (-5/+5), Contrast2012 (-100/+100)
+Tonalités   : Highlights2012 (-100/+100), Shadows2012 (-100/+100), Whites2012 (-100/+100), Blacks2012 (-100/+100)
+Présence    : Clarity2012 (-100/+100), Texture (-100/+100), Dehaze (-100/+100)
+Couleur     : Temperature (2000/50000 K), Tint (-150/+150), Vibrance (-100/+100), Saturation (-100/+100)
+HSL Teinte  : HueAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
+HSL Sat.    : SaturationAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
+HSL Lum.    : LuminanceAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
+Courbe tone : ParametricShadows/Darks/Lights/Highlights (-100/+100)
+              ParametricShadowSplit/MidtoneSplit/HighlightSplit (0/100)
+Détail      : Sharpness (0/150), SharpenRadius (0.5/3.0), SharpenDetail (0/100), SharpenEdgeMasking (0/100)
+              LuminanceSmoothing (0/100), ColorNoiseReduction (0/100)
+Effets      : GrainAmount (0/100), GrainSize (25/100), GrainFrequency (0/100)
+              VignetteAmount (-100/+100), VignetteMidpoint (0/100)
+Calibration : ShadowTint (-100/+100), RedHue/GreenHue/BlueHue (-100/+100),
+              RedSaturation/GreenSaturation/BlueSaturation (-100/+100)
 
-FORMAT DE SORTIE OBLIGATOIRE (commence directement par <?xpacket) :
+FORMAT DE SORTIE OBLIGATOIRE (commence immédiatement par <?xpacket) :
 <?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
 <x:xmpmeta xmlns:x='adobe:ns:meta/'>
 <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
@@ -74,41 +79,102 @@ FORMAT DE SORTIE OBLIGATOIRE (commence directement par <?xpacket) :
   crs:Version='14.4'
   crs:ProcessVersion='11.0'
   crs:WhiteBalance='Custom'
-  crs:Exposure2012="0.00"
-  [... autres paramètres ...]
+  [PARAMÈTRES]
 />
 </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end='w'?>`;
 
 // ============================================================
+// Construction du message utilisateur selon le mode
+// ============================================================
+function buildUserMessage(mode, prompt) {
+    switch (mode) {
+        case 'prompt':
+            return `Voici la photo à développer.\n\nInstructions : ${prompt}`;
+
+        case 'reference':
+            return `La PREMIÈRE IMAGE est la photo à développer.
+La DEUXIÈME IMAGE est la photo modèle dont tu dois analyser et reproduire fidèlement le style.
+
+Analyse en détail la photo modèle :
+• Balance des blancs et température de couleur
+• Exposition globale, gestion des hautes lumières et des ombres (courbe de tonalité)
+• Contraste général : doux/dur, courbe en S ou aplatie
+• Vibrance, saturation, palette de couleurs dominante
+• Ajustements HSL éventuels (décalages de teinte, boosts de certaines couleurs)
+• Grain photographique, vignettage, effets de style
+• Caractère artistique général : chaud/froid, coloré/désaturé, lumineux/sombre, mat/contrasté
+
+Génère un XMP qui transpose fidèlement ce style sur la première photo,
+en tenant compte de ses propres caractéristiques (exposition native, dominante couleur, etc.)
+pour que le résultat soit naturel et cohérent — pas une copie mécanique mais une interprétation intelligente.`;
+
+        case 'both':
+            return `La PREMIÈRE IMAGE est la photo à développer.
+La DEUXIÈME IMAGE est la photo modèle dont tu dois t'inspirer pour le style général.
+
+Étape 1 — Analyse le style de la photo modèle (balance des blancs, contraste, palette, HDR, grain, vignettage…)
+Étape 2 — Applique ce style à la première photo en t'adaptant à ses caractéristiques propres
+Étape 3 — Par-dessus ce style, applique ces ajustements complémentaires : ${prompt}
+
+Si les instructions complémentaires entrent en conflit avec le style modèle sur un point précis,
+les instructions ont la priorité sur ce point uniquement.`;
+
+        default:
+            return `Optimise cette photo. ${prompt || ''}`;
+    }
+}
+
+// ============================================================
+// Construction du tableau content Claude (images + texte)
+// ============================================================
+function buildClaudeContent(imageBase64, referenceBase64, mode, prompt) {
+    const content = [];
+
+    // Image 1 — toujours présente : la photo à développer
+    content.push({
+        type: 'image',
+        source: {
+            type:       'base64',
+            media_type: 'image/jpeg',
+            data:       imageBase64,
+        },
+    });
+
+    // Image 2 — photo modèle (modes reference et both uniquement)
+    if (referenceBase64 && (mode === 'reference' || mode === 'both')) {
+        content.push({
+            type: 'image',
+            source: {
+                type:       'base64',
+                media_type: 'image/jpeg',
+                data:       referenceBase64,
+            },
+        });
+    }
+
+    // Message texte
+    content.push({
+        type: 'text',
+        text: buildUserMessage(mode, prompt),
+    });
+
+    return content;
+}
+
+// ============================================================
 // Appel à l'API Claude
 // ============================================================
-async function callClaudeAPI(imageBase64, userPrompt, apiKey) {
+function callClaudeAPI(imageBase64, referenceBase64, mode, prompt, apiKey) {
     return new Promise((resolve, reject) => {
-        const requestBody = JSON.stringify({
+        const content = buildClaudeContent(imageBase64, referenceBase64, mode, prompt);
+
+        const body = JSON.stringify({
             model:      CONFIG.MODEL,
             max_tokens: CONFIG.MAX_TOKENS,
             system:     SYSTEM_PROMPT,
-            messages: [
-                {
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'image',
-                            source: {
-                                type:       'base64',
-                                media_type: 'image/jpeg',
-                                data:       imageBase64,
-                            }
-                        },
-                        {
-                            type: 'text',
-                            text: userPrompt
-                        }
-                    ]
-                }
-            ]
+            messages:   [{ role: 'user', content }],
         });
 
         const options = {
@@ -116,13 +182,16 @@ async function callClaudeAPI(imageBase64, userPrompt, apiKey) {
             port:     443,
             path:     '/v1/messages',
             method:   'POST',
-            headers: {
+            headers:  {
                 'Content-Type':      'application/json',
-                'Content-Length':    Buffer.byteLength(requestBody),
+                'Content-Length':    Buffer.byteLength(body),
                 'x-api-key':         apiKey,
                 'anthropic-version': '2023-06-01',
-            }
+            },
         };
+
+        const numImages = (mode === 'prompt') ? 1 : 2;
+        log('INFO', `Appel API — modèle: ${CONFIG.MODEL}, mode: ${mode}, images: ${numImages}`);
 
         const req = https.request(options, (res) => {
             let data = '';
@@ -130,35 +199,28 @@ async function callClaudeAPI(imageBase64, userPrompt, apiKey) {
             res.on('end', () => {
                 try {
                     const parsed = JSON.parse(data);
-                    
                     if (parsed.error) {
-                        reject(new Error(`API Error: ${parsed.error.message || JSON.stringify(parsed.error)}`));
+                        reject(new Error(`API error: ${parsed.error.message || JSON.stringify(parsed.error)}`));
                         return;
                     }
-                    
-                    if (!parsed.content || !parsed.content[0]) {
+                    if (!parsed.content?.[0]?.text) {
                         reject(new Error('Réponse API vide ou malformée'));
                         return;
                     }
-                    
-                    const xmpContent = parsed.content[0].text;
-                    resolve(xmpContent);
+                    resolve(parsed.content[0].text);
                 } catch (e) {
-                    reject(new Error('Erreur parsing réponse API: ' + e.message));
+                    reject(new Error('Erreur parsing réponse: ' + e.message + '\n' + data.slice(0, 300)));
                 }
             });
         });
 
-        req.on('error', (e) => {
-            reject(new Error('Erreur réseau: ' + e.message));
-        });
-
-        req.setTimeout(120000, () => {
+        req.on('error', e => reject(new Error('Erreur réseau: ' + e.message)));
+        req.setTimeout(150_000, () => {
             req.destroy();
-            reject(new Error('Timeout: l\'API Claude n\'a pas répondu en 120s'));
+            reject(new Error('Timeout 150s — API Claude sans réponse'));
         });
 
-        req.write(requestBody);
+        req.write(body);
         req.end();
     });
 }
@@ -166,222 +228,225 @@ async function callClaudeAPI(imageBase64, userPrompt, apiKey) {
 // ============================================================
 // Validation et nettoyage du XMP
 // ============================================================
-function validateAndCleanXMP(xmpContent) {
-    // Supprimer les éventuels backticks Markdown
-    xmpContent = xmpContent.replace(/```xml\n?/g, '').replace(/```\n?/g, '');
-    xmpContent = xmpContent.trim();
-    
-    // Vérifier la présence des marqueurs XMP requis
-    const hasXpacket = xmpContent.includes('<?xpacket');
-    const hasXmpmeta = xmpContent.includes('xmpmeta');
-    const hasCrs     = xmpContent.includes('crs:');
-    
-    if (!hasCrs) {
+function validateAndCleanXMP(raw) {
+    // Supprimer éventuels blocs Markdown
+    let xmp = raw.replace(/```xml\n?/g, '').replace(/```\n?/g, '').trim();
+
+    if (!xmp.includes('crs:')) {
         throw new Error('Le XMP généré ne contient aucun paramètre Camera Raw (crs:)');
     }
-    
-    // Si pas de déclaration xpacket, l'ajouter
-    if (!hasXpacket) {
-        xmpContent = `<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>\n` + xmpContent;
+
+    // Ajouter les balises xpacket si absentes
+    if (!xmp.includes('<?xpacket')) {
+        xmp = `<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>\n` + xmp;
     }
-    if (!xmpContent.includes('<?xpacket end=')) {
-        xmpContent += `\n<?xpacket end='w'?>`;
+    if (!xmp.includes('<?xpacket end=')) {
+        xmp += `\n<?xpacket end='w'?>`;
     }
-    
-    return xmpContent;
+
+    return xmp;
+}
+
+// ============================================================
+// Handler générique pour les requêtes POST /analyze
+// ============================================================
+async function handleAnalyze(body, apiKeyFromHeader, res) {
+    let payload;
+    try {
+        payload = JSON.parse(body);
+    } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'JSON invalide dans le corps de la requête' }));
+        return;
+    }
+
+    const { image, mode = 'prompt', prompt = '', reference } = payload;
+    const apiKey = apiKeyFromHeader || CONFIG.API_KEY;
+
+    // --- Validations ---
+    if (!apiKey) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error: 'Clé API manquante. Définissez ANTHROPIC_API_KEY ou passez X-API-Key dans le header.',
+        }));
+        return;
+    }
+
+    if (!image) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Champ "image" (base64) manquant' }));
+        return;
+    }
+
+    const validModes = ['prompt', 'reference', 'both'];
+    if (!validModes.includes(mode)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Mode invalide: "${mode}". Valeurs: ${validModes.join(', ')}` }));
+        return;
+    }
+
+    if ((mode === 'reference' || mode === 'both') && !reference) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error: `Champ "reference" (base64) obligatoire pour le mode "${mode}"`,
+        }));
+        return;
+    }
+
+    if ((mode === 'prompt' || mode === 'both') && !prompt) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Champ "prompt" obligatoire pour le mode "${mode}"` }));
+        return;
+    }
+
+    log('INFO', `Requête reçue — mode: ${mode}, image: ${Math.round(image.length/1024)}KB` +
+        (reference ? `, référence: ${Math.round(reference.length/1024)}KB` : ''));
+
+    try {
+        const xmpRaw  = await callClaudeAPI(image, reference || null, mode, prompt, apiKey);
+        const xmpFinal = validateAndCleanXMP(xmpRaw);
+
+        log('INFO', `XMP généré — ${xmpFinal.length} chars`);
+
+        res.writeHead(200, {
+            'Content-Type':   'application/xml',
+            'X-Claude-Model': CONFIG.MODEL,
+            'X-Mode':         mode,
+        });
+        res.end(xmpFinal);
+
+    } catch (err) {
+        log('ERROR', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error:      err.message,
+            suggestion: 'Vérifiez la clé API, les images base64, et les logs du serveur.',
+        }));
+    }
 }
 
 // ============================================================
 // Serveur HTTP
 // ============================================================
 const server = http.createServer(async (req, res) => {
-    // CORS pour faciliter les tests depuis le navigateur
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Origin',  '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
-    
+
     if (req.method === 'OPTIONS') {
         res.writeHead(200);
         res.end();
         return;
     }
-    
-    // ── GET /health ── vérification que le serveur tourne
+
+    // ── GET /health ──────────────────────────────────────────
     if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-            status:    'ok',
-            version:   '1.0.0',
-            model:     CONFIG.MODEL,
-            hasApiKey: !!CONFIG.API_KEY,
+            status:     'ok',
+            version:    '2.0.0',
+            model:      CONFIG.MODEL,
+            hasApiKey:  !!CONFIG.API_KEY,
+            modes:      ['prompt', 'reference', 'both'],
         }));
         return;
     }
-    
-    // ── POST /analyze ── endpoint principal
+
+    // ── POST /analyze ─────────────────────────────────────────
     if (req.method === 'POST' && req.url === '/analyze') {
         let body = '';
-        
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', async () => {
-            try {
-                log('INFO', `Requête reçue : ${body.length} bytes`);
-                
-                // Parser le JSON
-                let payload;
-                try {
-                    payload = JSON.parse(body);
-                } catch (e) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'JSON invalide dans le corps de la requête' }));
-                    return;
-                }
-                
-                const { image, prompt } = payload;
-                
-                // Récupérer la clé API (header ou config)
-                const apiKey = req.headers['x-api-key'] || CONFIG.API_KEY;
-                
-                if (!apiKey) {
-                    res.writeHead(401, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ 
-                        error: 'Clé API manquante. Définissez ANTHROPIC_API_KEY ou passez X-API-Key dans le header.' 
-                    }));
-                    return;
-                }
-                
-                if (!image) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Champ "image" (base64) manquant' }));
-                    return;
-                }
-                
-                if (!prompt) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Champ "prompt" manquant' }));
-                    return;
-                }
-                
-                log('INFO', `Appel Claude API — Modèle: ${CONFIG.MODEL}, Prompt: "${prompt.substring(0, 80)}..."`);
-                
-                // Appeler l'API Claude
-                const xmpRaw = await callClaudeAPI(image, prompt, apiKey);
-                
-                log('INFO', `Réponse reçue : ${xmpRaw.length} chars`);
-                
-                // Valider et nettoyer le XMP
-                const xmpContent = validateAndCleanXMP(xmpRaw);
-                
-                log('INFO', 'XMP validé et nettoyé avec succès');
-                
-                // Retourner le XMP directement (ou en JSON)
-                res.writeHead(200, { 
-                    'Content-Type': 'application/xml',
-                    'X-Claude-Model': CONFIG.MODEL,
-                });
-                res.end(xmpContent);
-                
-            } catch (error) {
-                log('ERROR', error.message);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ 
-                    error: error.message,
-                    suggestion: 'Vérifiez votre clé API et que la photo a bien été encodée en base64'
-                }));
+        // Augmenter la limite de taille pour 2 images base64 (~8MB max)
+        let size = 0;
+        req.on('data', chunk => {
+            size += chunk.length;
+            if (size > 16 * 1024 * 1024) {   // 16 MB hard limit
+                req.destroy();
+                res.writeHead(413, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Payload trop volumineux (>16MB)' }));
+                return;
             }
+            body += chunk.toString();
         });
-        
+        req.on('end', () => handleAnalyze(body, req.headers['x-api-key'], res));
         return;
     }
-    
-    // ── POST /analyze-file ── pour tester depuis curl avec un fichier JPEG local
+
+    // ── POST /analyze-file ── test local avec chemin disque ──
     if (req.method === 'POST' && req.url === '/analyze-file') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
             try {
-                const payload   = JSON.parse(body);
-                const imagePath = payload.imagePath;
-                const prompt    = payload.prompt || 'Optimise cette photo';
-                const apiKey    = req.headers['x-api-key'] || CONFIG.API_KEY;
-                
-                if (!fs.existsSync(imagePath)) {
+                const payload     = JSON.parse(body);
+                const apiKey      = req.headers['x-api-key'] || CONFIG.API_KEY;
+                const mode        = payload.mode || 'prompt';
+                const prompt      = payload.prompt || 'Optimise cette photo';
+
+                if (!payload.imagePath || !fs.existsSync(payload.imagePath)) {
                     res.writeHead(404, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: `Fichier introuvable: ${imagePath}` }));
+                    res.end(JSON.stringify({ error: `Fichier introuvable: ${payload.imagePath}` }));
                     return;
                 }
-                
-                const imageBuffer = fs.readFileSync(imagePath);
-                const imageBase64 = imageBuffer.toString('base64');
-                
-                const xmpRaw     = await callClaudeAPI(imageBase64, prompt, apiKey);
-                const xmpContent = validateAndCleanXMP(xmpRaw);
-                
+
+                const imageBase64 = fs.readFileSync(payload.imagePath).toString('base64');
+                let   refBase64   = null;
+
+                if ((mode === 'reference' || mode === 'both') && payload.referencePath) {
+                    if (!fs.existsSync(payload.referencePath)) {
+                        res.writeHead(404, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: `Photo modèle introuvable: ${payload.referencePath}` }));
+                        return;
+                    }
+                    refBase64 = fs.readFileSync(payload.referencePath).toString('base64');
+                }
+
+                const xmpRaw   = await callClaudeAPI(imageBase64, refBase64, mode, prompt, apiKey);
+                const xmpFinal = validateAndCleanXMP(xmpRaw);
+
                 res.writeHead(200, { 'Content-Type': 'application/xml' });
-                res.end(xmpContent);
-                
-            } catch (error) {
-                log('ERROR', error.message);
+                res.end(xmpFinal);
+
+            } catch (err) {
+                log('ERROR', err.message);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: error.message }));
+                res.end(JSON.stringify({ error: err.message }));
             }
         });
         return;
     }
-    
-    // Route inconnue
+
+    // ── 404 ───────────────────────────────────────────────────
     res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-        error: 'Route inconnue',
+    res.end(JSON.stringify({
+        error:  'Route inconnue',
         routes: [
             'GET  /health',
-            'POST /analyze       { image: "base64...", prompt: "..." }',
-            'POST /analyze-file  { imagePath: "/path/to/photo.jpg", prompt: "..." }',
-        ]
+            'POST /analyze       { image, mode, prompt?, reference? }',
+            'POST /analyze-file  { imagePath, mode, prompt?, referencePath? }',
+        ],
     }));
 });
 
 // ============================================================
 // Démarrage
 // ============================================================
-function promptForApiKey(callback) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('Clé API Anthropic (laissez vide pour configurer plus tard) : ', (answer) => {
-        rl.close();
-        callback(answer.trim());
-    });
-}
-
-async function start() {
+server.listen(CONFIG.PORT, '127.0.0.1', () => {
     log('INFO', '╔══════════════════════════════════════╗');
-    log('INFO', '║   Claude Photo AI — Serveur local    ║');
+    log('INFO', '║  Claude Photo AI v2 — Serveur local  ║');
     log('INFO', '╚══════════════════════════════════════╝');
-    
-    if (!CONFIG.API_KEY) {
-        console.log('\n⚠️  Aucune clé API trouvée dans ANTHROPIC_API_KEY');
-        console.log('   Vous pourrez la passer via le header X-API-Key sur chaque requête,');
-        console.log('   ou la configurer dans le plugin Lightroom.\n');
-    } else {
-        log('INFO', `Clé API configurée (${CONFIG.API_KEY.substring(0, 10)}...)`);
-    }
-    
-    server.listen(CONFIG.PORT, '127.0.0.1', () => {
-        log('INFO', `Serveur démarré sur http://localhost:${CONFIG.PORT}`);
-        console.log('\n✅ Serveur Claude Photo AI prêt !');
-        console.log(`   URL: http://localhost:${CONFIG.PORT}`);
-        console.log(`   Health check: http://localhost:${CONFIG.PORT}/health`);
-        console.log('\n   Laissez ce terminal ouvert pendant que vous utilisez Lightroom.\n');
-    });
-    
-    server.on('error', (e) => {
-        if (e.code === 'EADDRINUSE') {
-            log('ERROR', `Le port ${CONFIG.PORT} est déjà utilisé. Changez PORT= dans la commande.`);
-            console.error(`\n❌ Port ${CONFIG.PORT} occupé. Essayez: PORT=3001 node server.js`);
-        } else {
-            log('ERROR', e.message);
-        }
-        process.exit(1);
-    });
-}
+    log('INFO', `Port: ${CONFIG.PORT} | Modèle: ${CONFIG.MODEL}`);
+    log('INFO', `Clé API: ${CONFIG.API_KEY ? CONFIG.API_KEY.slice(0, 14) + '...' : 'non configurée'}`);
 
-start();
+    console.log(`\n✅ Claude Photo AI v2 prêt sur http://localhost:${CONFIG.PORT}`);
+    console.log('   Modes disponibles : prompt | reference | both');
+    console.log('   Health check      : http://localhost:' + CONFIG.PORT + '/health\n');
+});
+
+server.on('error', e => {
+    if (e.code === 'EADDRINUSE') {
+        console.error(`\n❌ Port ${CONFIG.PORT} occupé — essayez: PORT=3001 node server.js`);
+    } else {
+        console.error('\n❌ Erreur serveur:', e.message);
+    }
+    process.exit(1);
+});
