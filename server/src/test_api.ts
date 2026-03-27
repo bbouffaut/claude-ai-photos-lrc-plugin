@@ -4,9 +4,9 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 
+import { CONFIG } from './config';
 import { RequestResult, TestMode, TestPayload } from './types';
 
-const SERVER = process.env.SERVER_URL ?? 'http://localhost:3000';
 const MODE = (process.argv[2] as TestMode | undefined) ?? 'health';
 const IMG = process.argv[3];
 const ARG4 = process.argv[4];
@@ -54,7 +54,7 @@ const main = async (): Promise<void> => {
     console.log('╚══════════════════════════════════════╝\n');
 
     console.log('🔍 Health check...');
-    const health = await request('GET', `${SERVER}/health`).catch((error: Error) => ({
+    const health = await request('GET', `${CONFIG.SERVER_URL}/health`).catch((error: Error) => ({
         status: 0,
         body: error.message,
     }));
@@ -113,10 +113,12 @@ const main = async (): Promise<void> => {
     }
     console.log(`   Image     : ${Math.round(payload.image.length / 1024)}KB`);
 
-    const result = await request('POST', `${SERVER}/analyze`, JSON.stringify(payload)).catch((error: Error) => ({
-        status: 0,
-        body: error.message,
-    }));
+    const result = await request('POST', `${CONFIG.SERVER_URL}/analyze`, JSON.stringify(payload)).catch(
+        (error: Error) => ({
+            status: 0,
+            body: error.message,
+        }),
+    );
 
     if (result.status === 200) {
         const params = [...result.body.matchAll(/crs:([A-Za-z0-9]+)="([^"]*)"/g)]

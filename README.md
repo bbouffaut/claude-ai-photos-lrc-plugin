@@ -173,6 +173,9 @@ Exemple de fichier `.env` :
 ANTHROPIC_API_KEY=sk-ant-votre-cle-ici
 # ou
 anthropic_key=sk-ant-votre-cle-ici
+SERVER_URL=http://localhost:3000
+# alias accepté aussi si besoin :
+# SEVER_URL=http://localhost:3000
 PORT=3000
 ```
 

@@ -36,6 +36,7 @@ export interface ClaudeApiResponse {
 export interface ServerConfig {
     PORT: number;
     API_KEY: string;
+    SERVER_URL: string;
     MODEL: string;
     MAX_TOKENS: number;
     LOG_FILE: string;

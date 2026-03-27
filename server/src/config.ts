@@ -48,6 +48,7 @@ loadEnvFile(resolveEnvFilePath());
 export const CONFIG: ServerConfig = {
     PORT: Number(process.env.PORT ?? 3000),
     API_KEY: process.env.ANTHROPIC_API_KEY ?? process.env.anthropic_key ?? '',
+    SERVER_URL: process.env.SERVER_URL ?? process.env.SEVER_URL ?? 'http://localhost:3000',
     MODEL: 'claude-sonnet-4-6',
     MAX_TOKENS: 2048,
     LOG_FILE: path.join(__dirname, '..', 'claude_photo_server.log'),
