@@ -222,6 +222,9 @@ yarn test prompt /path/to/photo.jpg "Style cinématique désaturé"
 # Test basique (sans photo)
 yarn test
 
+# Equivalent via Makefile
+make test prompt /path/to/photo.jpg "Style cinématique désaturé"
+
 # Test via curl
 curl -X POST http://localhost:3000/analyze-file \
   -H "Content-Type: application/json" \

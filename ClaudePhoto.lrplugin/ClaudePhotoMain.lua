@@ -237,26 +237,16 @@ local SYSTEM_PROMPT = [[Tu es un expert en post-traitement photographique et en 
 REGLES ABSOLUES :
 1. Reponds UNIQUEMENT avec le contenu XML du fichier XMP — aucun texte avant ou apres, pas de backticks
 2. Le XMP doit etre compatible Lightroom Classic 6+ (ProcessVersion 11.0)
-3. Utilise exclusivement les parametres crs: avec les plages ci-dessous
-4. N'inclus que les parametres effectivement modifies
-5. Prefere les ajustements naturels et subtils aux valeurs extremes
+3. Tu peux utiliser TOUTES les structures XMP reellement utiles et compatibles Lightroom Classic, pas seulement les attributs crs: simples
+4. Tu peux inclure des reglages avances si cela sert le rendu demande : crop, geometrie, courbes, calibration, masques, calques / retouches locales, reglages IA et autres structures XMP avancees supportees par Lightroom Classic
+5. N'inclus que les parametres effectivement modifies et utiles au resultat
+6. Prefere des reglages credibles, coherents et compatibles Lightroom a des blocs inventes ou invalides
 
-PLAGES DE VALEURS :
-Exposition  : Exposure2012 (-5/+5), Contrast2012 (-100/+100)
-Tonalites   : Highlights2012 (-100/+100), Shadows2012 (-100/+100), Whites2012 (-100/+100), Blacks2012 (-100/+100)
-Presence    : Clarity2012 (-100/+100), Texture (-100/+100), Dehaze (-100/+100)
-Couleur     : Temperature (2000/50000 K), Tint (-150/+150), Vibrance (-100/+100), Saturation (-100/+100)
-HSL Teinte  : HueAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
-HSL Sat.    : SaturationAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
-HSL Lum.    : LuminanceAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
-Courbe tone : ParametricShadows/Darks/Lights/Highlights (-100/+100)
-              ParametricShadowSplit/MidtoneSplit/HighlightSplit (0/100)
-Detail      : Sharpness (0/150), SharpenRadius (0.5/3.0), SharpenDetail (0/100), SharpenEdgeMasking (0/100)
-              LuminanceSmoothing (0/100), ColorNoiseReduction (0/100)
-Effets      : GrainAmount (0/100), GrainSize (25/100), GrainFrequency (0/100)
-              VignetteAmount (-100/+100), VignetteMidpoint (0/100)
-Calibration : ShadowTint (-100/+100), RedHue/GreenHue/BlueHue (-100/+100),
-              RedSaturation/GreenSaturation/BlueSaturation (-100/+100)
+IMPORTANT :
+- Ne te limite pas a la liste des parametres classiques
+- Si un ajustement necessite une structure XMP imbriquee, des descriptions RDF supplementaires, des masques, des corrections locales, du recadrage ou des reglages IA, inclus-les
+- Utilise les noms, namespaces et structures XMP attendus par Lightroom Classic / Adobe Camera Raw
+- N'invente jamais de syntaxe pseudo-XMP
 
 FORMAT DE SORTIE OBLIGATOIRE :
 <?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
@@ -327,6 +317,13 @@ local function jsonEscape(s)
     s = s:gsub('\r', '\\r')
     s = s:gsub('\t', '\\t')
     return s
+end
+
+local function isLikelyXmp(content)
+    if not content then return false end
+    return content:find("<?xpacket", 1, true)
+        or content:find("<x:xmpmeta", 1, true)
+        or content:find("<rdf:Description", 1, true)
 end
 
 -- ============================================================
@@ -412,7 +409,7 @@ local function callClaudeViaServer(imageBase64, refBase64, mode, userPrompt, ser
     end
 
     -- Reponse XMP directe
-    if result:find("crs:") then
+    if isLikelyXmp(result) then
         return result
     end
 
@@ -902,9 +899,9 @@ local function processPhotos(photos, config)
         end
 
         -- Validation minimale
-        if not xmpContent:find("crs:") then
+        if not isLikelyXmp(xmpContent) then
             logger:error("Reponse non-XMP pour " .. photoName .. " : " .. xmpContent:sub(1, 400))
-            table.insert(results.errors, photoName .. " : reponse invalide (pas de parametres crs:)")
+            table.insert(results.errors, photoName .. " : reponse invalide (XMP Lightroom non detecte)")
             results.failed = results.failed + 1
             goto continue
         end

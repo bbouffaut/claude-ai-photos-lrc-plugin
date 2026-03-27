@@ -11,6 +11,12 @@ const MODE = (process.argv[2] as TestMode | undefined) ?? 'health';
 const IMG = process.argv[3];
 const ARG4 = process.argv[4];
 const ARG5 = process.argv[5];
+const EXTRA_ARGS = process.argv.slice(4);
+
+const joinArgs = (args: string[]): string | undefined => {
+    const joined = args.join(' ').trim();
+    return joined == '' ? undefined : joined;
+};
 
 const request = (method: string, url: string, body?: string): Promise<RequestResult> =>
     new Promise((resolve, reject) => {
@@ -90,7 +96,7 @@ const main = async (): Promise<void> => {
     };
 
     if (MODE === 'prompt') {
-        payload.prompt = ARG4 ?? 'Style cinématique désaturé';
+        payload.prompt = joinArgs(EXTRA_ARGS) ?? 'Style cinématique désaturé';
     } else if (MODE === 'reference') {
         if (!ARG4 || !fs.existsSync(ARG4)) {
             console.error('❌ Photo modèle introuvable:', ARG4);
@@ -103,7 +109,7 @@ const main = async (): Promise<void> => {
             process.exit(1);
         }
         payload.reference = fs.readFileSync(ARG4).toString('base64');
-        payload.prompt = ARG5 ?? 'Ajoute un grain subtil et un léger vignettage';
+        payload.prompt = joinArgs(process.argv.slice(5)) ?? 'Ajoute un grain subtil et un léger vignettage';
     }
 
     console.log(`\n🤖 Test mode "${MODE}"...`);

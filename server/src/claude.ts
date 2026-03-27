@@ -9,26 +9,16 @@ const SYSTEM_PROMPT = `Tu es un expert en post-traitement photographique et en L
 RÈGLES ABSOLUES :
 1. Réponds UNIQUEMENT avec le contenu XML du fichier XMP — aucun texte avant ou après, pas de backticks
 2. Le XMP doit être compatible Lightroom Classic 6+ (ProcessVersion 11.0)
-3. Utilise exclusivement les paramètres crs: avec les plages ci-dessous
-4. N'inclus que les paramètres effectivement modifiés (pas les valeurs par défaut)
-5. Préfère les ajustements naturels et subtils aux valeurs extrêmes
+3. Tu peux utiliser TOUTES les structures XMP réellement utiles et compatibles Lightroom Classic, pas seulement les attributs crs: simples
+4. Tu peux inclure des réglages avancés si cela sert le rendu demandé : crop, géométrie, courbes, calibration, masques, calques / retouches locales, réglages IA et autres structures XMP avancées supportées par Lightroom Classic
+5. N'inclus que les paramètres effectivement modifiés et utiles au résultat
+6. Préfère des réglages crédibles, cohérents et compatibles Lightroom à des blocs inventés ou invalides
 
-PLAGES DE VALEURS :
-Exposition  : Exposure2012 (-5/+5), Contrast2012 (-100/+100)
-Tonalités   : Highlights2012 (-100/+100), Shadows2012 (-100/+100), Whites2012 (-100/+100), Blacks2012 (-100/+100)
-Présence    : Clarity2012 (-100/+100), Texture (-100/+100), Dehaze (-100/+100)
-Couleur     : Temperature (2000/50000 K), Tint (-150/+150), Vibrance (-100/+100), Saturation (-100/+100)
-HSL Teinte  : HueAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
-HSL Sat.    : SaturationAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
-HSL Lum.    : LuminanceAdjustmentRed/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta (-100/+100)
-Courbe tone : ParametricShadows/Darks/Lights/Highlights (-100/+100)
-              ParametricShadowSplit/MidtoneSplit/HighlightSplit (0/100)
-Détail      : Sharpness (0/150), SharpenRadius (0.5/3.0), SharpenDetail (0/100), SharpenEdgeMasking (0/100)
-              LuminanceSmoothing (0/100), ColorNoiseReduction (0/100)
-Effets      : GrainAmount (0/100), GrainSize (25/100), GrainFrequency (0/100)
-              VignetteAmount (-100/+100), VignetteMidpoint (0/100)
-Calibration : ShadowTint (-100/+100), RedHue/GreenHue/BlueHue (-100/+100),
-              RedSaturation/GreenSaturation/BlueSaturation (-100/+100)
+IMPORTANT :
+- Ne te limite pas à la liste des paramètres classiques
+- Si un ajustement nécessite une structure XMP imbriquée, des descriptions RDF supplémentaires, des masques, des corrections locales, du recadrage ou des réglages IA, inclus-les
+- Utilise les noms, namespaces et structures XMP attendus par Lightroom Classic / Adobe Camera Raw
+- N'invente jamais de syntaxe pseudo-XMP
 
 FORMAT DE SORTIE OBLIGATOIRE (commence immédiatement par <?xpacket) :
 <?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
@@ -187,8 +177,8 @@ export const callClaudeAPI = (
 export const validateAndCleanXMP = (raw: string): string => {
     let xmp = raw.replace(/```xml\n?/g, '').replace(/```\n?/g, '').trim();
 
-    if (!xmp.includes('crs:')) {
-        throw new Error('Le XMP généré ne contient aucun paramètre Camera Raw (crs:)');
+    if (!xmp.includes('<rdf:Description') && !xmp.includes('<x:xmpmeta') && !xmp.includes('<?xpacket')) {
+        throw new Error('Le contenu généré ne ressemble pas à un XMP Lightroom valide');
     }
 
     if (!xmp.includes('<?xpacket')) {

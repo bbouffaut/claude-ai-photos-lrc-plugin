@@ -1,5 +1,6 @@
 YARN ?= yarn
 SERVER_DIR := server
+TEST_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 
 .PHONY: install build dev start health test clean
 
@@ -19,7 +20,10 @@ health:
 	curl http://localhost:3000/health
 
 test:
-	$(YARN) --cwd $(SERVER_DIR) test
+	$(YARN) --cwd $(SERVER_DIR) test $(TEST_ARGS)
 
 clean:
 	rm -rf $(SERVER_DIR)/dist
+
+%:
+	@:
