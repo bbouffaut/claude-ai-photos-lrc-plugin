@@ -1,0 +1,6 @@
+.DS_Store
+.env
+server/.env
+server/node_modules/
+server/dist/
+server/claude_photo_server.log

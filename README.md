@@ -1,52 +1,83 @@
-# 🤖 Claude Photo AI — Plugin Lightroom Classic
+# Claude Photo AI - Plugin Lightroom Classic
 
 Développez vos photos avec l'intelligence artificielle : décrivez en langage naturel les modifications souhaitées, et Claude analyse votre photo puis génère automatiquement les réglages Lightroom.
 
 ---
 
-## 📁 Structure des fichiers
+## Structure des fichiers
 
 ```
 ClaudePhoto.lrplugin/        ← Dossier du plugin (à installer dans Lightroom)
 ├── Info.lua                 ← Manifeste du plugin (version, menus)
 └── ClaudePhotoMain.lua      ← Code principal (UI + workflow)
 
-server/                      ← Serveur intermédiaire Node.js
-├── server.js                ← Serveur HTTP local (pont vers l'API Claude)
-├── test_api.js              ← Script de test
-└── package.json             ← Dépendances (aucune ! Node.js standard seulement)
+server/                      ← Serveur intermédiaire TypeScript
+├── src/
+│   ├── server.ts            ← Serveur HTTP local (pont vers l'API Claude)
+│   └── test_api.ts          ← Script de test local
+├── dist/                    ← JavaScript compilé (généré par `yarn build`)
+├── package.json             ← Scripts Yarn
+└── tsconfig.json            ← Configuration TypeScript
+
+Makefile                     ← Commandes courantes pour lancer le serveur
 ```
 
 ---
 
-## ⚙️ Prérequis
+## Prérequis
 
 - **Lightroom Classic** 6.0 ou supérieur (CC ou version perpétuelle)
 - **Node.js** 16+ (https://nodejs.org) — pour le serveur intermédiaire
+- **Yarn** 1.x ou compatible
 - **Clé API Anthropic** — https://console.anthropic.com
 
 ---
 
-## 🚀 Installation
+## Installation
 
-### Étape 1 : Démarrer le serveur local
+### Étape 1 : Installer les dépendances du serveur
 
 ```bash
-# Terminal — à laisser ouvert pendant que vous utilisez Lightroom
+make install
+```
 
-# Avec votre clé API en variable d'environnement (recommandé)
-cd server/
-ANTHROPIC_API_KEY=sk-ant-votre-cle-ici node server.js
+Vous pouvez aussi lancer directement :
 
-# Windows
-set ANTHROPIC_API_KEY=sk-ant-votre-cle-ici
-node server.js
+```bash
+yarn --cwd server install
+```
+
+### Étape 2 : Démarrer le serveur local
+
+Le plus simple :
+
+```bash
+cat > server/.env <<'EOF'
+ANTHROPIC_API_KEY=sk-ant-votre-cle-ici
+EOF
+
+make dev
+```
+
+Le `Makefile` utilise `yarn` dans le dossier `server/`. Si vous préférez appeler les scripts vous-même :
+
+```bash
+cd server
+yarn dev
 
 # Vérifier que ça fonctionne
 curl http://localhost:3000/health
 ```
 
-### Étape 2 : Installer le plugin dans Lightroom
+Le serveur charge automatiquement `server/.env` puis `.env` à la racine du repo si ces fichiers existent. Il accepte `ANTHROPIC_API_KEY` et aussi `anthropic_key` pour compatibilité. Les variables déjà définies dans votre shell gardent la priorité.
+
+Pour lancer la version compilée localement :
+
+```bash
+make start
+```
+
+### Étape 3 : Installer le plugin dans Lightroom
 
 1. Ouvrez Lightroom Classic
 2. Menu **Fichier → Gestionnaire de modules externes**
@@ -56,7 +87,7 @@ curl http://localhost:3000/health
 6. Le plugin apparaît dans la liste — vérifiez qu'il est **activé** (coche verte)
 7. Cliquez **Terminé**
 
-### Étape 3 : Utiliser le plugin
+### Étape 4 : Utiliser le plugin
 
 1. Dans Lightroom, **sélectionnez une ou plusieurs photos** dans la Bibliothèque
 2. Menu **Bibliothèque → Plugins → Développer avec Claude AI**
@@ -66,7 +97,7 @@ curl http://localhost:3000/health
 
 ---
 
-## 💬 Exemples de prompts
+## Exemples de prompts
 
 ### Portraits
 ```
@@ -106,7 +137,42 @@ tons chauds légèrement délavés, ombres remontées
 
 ---
 
-## 🔧 Configuration avancée
+## Développement local
+
+Le `Makefile` expose les commandes les plus courantes :
+
+```bash
+make install   # installe les dépendances Yarn du serveur
+make dev       # lance le serveur TypeScript en mode watch
+make build     # compile TypeScript vers server/dist
+make start     # compile puis lance la version JS compilée
+make test      # exécute le script de test local
+make health    # vérifie le endpoint /health
+make clean     # supprime server/dist
+```
+
+Les scripts Yarn équivalents :
+
+```bash
+yarn --cwd server dev
+yarn --cwd server build
+yarn --cwd server start
+yarn --cwd server test
+yarn --cwd server typecheck
+```
+
+Exemple de fichier `server/.env` :
+
+```dotenv
+ANTHROPIC_API_KEY=sk-ant-votre-cle-ici
+# ou
+anthropic_key=sk-ant-votre-cle-ici
+PORT=3000
+```
+
+---
+
+## Configuration avancée
 
 ### Mode API directe (sans serveur)
 
@@ -117,13 +183,13 @@ Si vous ne voulez pas démarrer un serveur Node.js, vous pouvez configurer le pl
 3. Entrez votre clé API Anthropic
 4. La clé est sauvegardée dans les préférences Lightroom
 
-> ⚠️ Note : Lightroom Classic a des limitations sur les requêtes HTTP très volumineuses. 
+> Note : Lightroom Classic a des limitations sur les requêtes HTTP très volumineuses.
 > Pour les photos haute résolution, le serveur Node.js est recommandé.
 
 ### Changer le port du serveur
 
 ```bash
-PORT=3001 ANTHROPIC_API_KEY=sk-ant-... node server.js
+PORT=3001 make dev
 ```
 
 Puis dans le plugin : Configuration avancée → URL serveur → `http://localhost:3001`
@@ -134,18 +200,18 @@ Les logs sont écrits dans `server/claude_photo_server.log`
 
 ---
 
-## 🧪 Tester sans Lightroom
+## Tester sans Lightroom
 
 Testez le serveur et l'API directement :
 
 ```bash
-cd server/
+cd server
 
 # Test avec une image réelle
-node test_api.js /path/to/photo.jpg "Style cinématique désaturé"
+yarn test prompt /path/to/photo.jpg "Style cinématique désaturé"
 
 # Test basique (sans photo)
-node test_api.js
+yarn test
 
 # Test via curl
 curl -X POST http://localhost:3000/analyze-file \
@@ -155,7 +221,7 @@ curl -X POST http://localhost:3000/analyze-file \
 
 ---
 
-## 📋 Format XMP généré
+## Format XMP généré
 
 Claude génère des fichiers XMP Adobe Camera Raw compatibles avec Lightroom Classic 6+. Exemple de sortie :
 
@@ -189,14 +255,15 @@ Vous pouvez aussi **glisser-déposer ce fichier .xmp directement dans Lightroom*
 
 ---
 
-## 🔍 Dépannage
+## Dépannage
 
 ### "Impossible de contacter le serveur"
-→ Vérifiez que `node server.js` est bien en cours d'exécution
+→ Vérifiez que `make dev` ou `yarn --cwd server dev` est bien en cours d'exécution
 → Testez : `curl http://localhost:3000/health`
 
 ### "Clé API manquante"
-→ Définissez `ANTHROPIC_API_KEY` avant de lancer le serveur
+→ Ajoutez `ANTHROPIC_API_KEY` ou `anthropic_key` dans `server/.env`
+→ Ou définissez `ANTHROPIC_API_KEY` dans votre shell avant de lancer le serveur
 → Ou utilisez le mode API directe dans la configuration du plugin
 
 ### "Le XMP généré ne contient aucun paramètre"
@@ -213,7 +280,7 @@ Vous pouvez aussi **glisser-déposer ce fichier .xmp directement dans Lightroom*
 
 ---
 
-## 🏗️ Architecture technique
+## Architecture technique
 
 ```
 Lightroom Classic (Lua)
@@ -224,14 +291,14 @@ Lightroom Classic (Lua)
     ├── Requête HTTP POST → localhost:3000/analyze
     │
     ▼
-Serveur Node.js (server.js)
+Serveur Node.js / TypeScript (server/src/server.ts)
     │
     ├── Reçoit { image: "base64...", prompt: "..." }
     ├── Construit le message Claude (vision + texte)
     ├── POST → api.anthropic.com/v1/messages
     │
     ▼
-Claude API (claude-opus-4-5)
+Claude API (claude-sonnet-4-6)
     │
     ├── Analyse l'image
     ├── Comprend les instructions
@@ -252,11 +319,9 @@ Lightroom Classic
 
 ---
 
-## 📝 Licence
+## Licence
 
 MIT — Libre d'utilisation et de modification.
 Clé API Anthropic requise (tarification à l'usage sur console.anthropic.com).
-
----
 
 *Développé avec Claude Opus — Anthropic*

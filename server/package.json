@@ -1,12 +1,14 @@
 {
   "name": "claude-photo-ai-server",
-  "version": "1.0.0",
-  "description": "Serveur intermédiaire pour le plugin Lightroom Claude Photo AI",
-  "main": "server.js",
+  "version": "2.0.0",
+  "description": "Serveur intermédiaire TypeScript pour le plugin Lightroom Claude Photo AI",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "node test_api.js",
-    "dev": "node --watch server.js"
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "test": "tsx src/test_api.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "keywords": ["lightroom", "claude", "anthropic", "photography", "xmp"],
   "author": "",
@@ -14,5 +16,11 @@
   "engines": {
     "node": ">=16.0.0"
   },
-  "dependencies": {}
+  "packageManager": "yarn@1.22.22",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
 }
