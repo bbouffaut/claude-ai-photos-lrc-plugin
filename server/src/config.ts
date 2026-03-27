@@ -36,14 +36,14 @@ const loadEnvFile = (envFilePath: string): void => {
     }
 };
 
-const ENV_FILE_PATHS = [
-    path.join(process.cwd(), '.env'),
-    path.join(__dirname, '..', '.env'),
-];
+const resolveEnvFilePath = (): string => {
+    const configuredPath = process.env.ENV_FILE ?? '.env';
+    return path.isAbsolute(configuredPath)
+        ? configuredPath
+        : path.resolve(process.cwd(), configuredPath);
+};
 
-for (const envFilePath of ENV_FILE_PATHS) {
-    loadEnvFile(envFilePath);
-}
+loadEnvFile(resolveEnvFilePath());
 
 export const CONFIG: ServerConfig = {
     PORT: Number(process.env.PORT ?? 3000),

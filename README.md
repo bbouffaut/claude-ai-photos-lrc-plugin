@@ -52,7 +52,7 @@ yarn --cwd server install
 Le plus simple :
 
 ```bash
-cat > server/.env <<'EOF'
+cat > .env <<'EOF'
 ANTHROPIC_API_KEY=sk-ant-votre-cle-ici
 EOF
 
@@ -69,7 +69,13 @@ yarn dev
 curl http://localhost:3000/health
 ```
 
-Le serveur charge automatiquement `server/.env` puis `.env` à la racine du repo si ces fichiers existent. Il accepte `ANTHROPIC_API_KEY` et aussi `anthropic_key` pour compatibilité. Les variables déjà définies dans votre shell gardent la priorité.
+Le serveur charge le fichier indiqué par la variable `ENV_FILE`. Si elle n'est pas définie, il charge `.env` depuis le répertoire courant. Il accepte `ANTHROPIC_API_KEY` et aussi `anthropic_key` pour compatibilité. Les variables déjà définies dans votre shell gardent la priorité.
+
+Exemple avec un chemin personnalisé :
+
+```bash
+ENV_FILE=server/.env make dev
+```
 
 Pour lancer la version compilée localement :
 
@@ -161,7 +167,7 @@ yarn --cwd server test
 yarn --cwd server typecheck
 ```
 
-Exemple de fichier `server/.env` :
+Exemple de fichier `.env` :
 
 ```dotenv
 ANTHROPIC_API_KEY=sk-ant-votre-cle-ici
@@ -262,7 +268,8 @@ Vous pouvez aussi **glisser-déposer ce fichier .xmp directement dans Lightroom*
 → Testez : `curl http://localhost:3000/health`
 
 ### "Clé API manquante"
-→ Ajoutez `ANTHROPIC_API_KEY` ou `anthropic_key` dans `server/.env`
+→ Ajoutez `ANTHROPIC_API_KEY` ou `anthropic_key` dans le fichier pointé par `ENV_FILE`
+→ Ou utilisez `.env` à la racine du projet si `ENV_FILE` n'est pas défini
 → Ou définissez `ANTHROPIC_API_KEY` dans votre shell avant de lancer le serveur
 → Ou utilisez le mode API directe dans la configuration du plugin
 
