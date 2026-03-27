@@ -95,6 +95,18 @@ local function writeFile(path, content)
     return true
 end
 
+local function normalizeServerUrl(url)
+    if not url then return "" end
+    url = url:gsub("^%s+", ""):gsub("%s+$", "")
+    url = url:gsub("/+$", "")
+    return url
+end
+
+local function isValidServerUrl(url)
+    url = normalizeServerUrl(url)
+    return url ~= "" and (url:match("^https?://") ~= nil)
+end
+
 -- Encodage base64 via commande systeme
 local function fileToBase64(filePath)
     local cmd
@@ -376,7 +388,8 @@ end
 -- Appel via serveur Node.js
 -- ============================================================
 local function callClaudeViaServer(imageBase64, refBase64, mode, userPrompt, serverUrl)
-    local url = serverUrl .. "/analyze"
+    local normalizedServerUrl = normalizeServerUrl(serverUrl)
+    local url = normalizedServerUrl .. "/analyze"
 
     local parts = {
         string.format('"image":"%s"', imageBase64),
@@ -395,7 +408,7 @@ local function callClaudeViaServer(imageBase64, refBase64, mode, userPrompt, ser
 
     local result = LrHttp.post(url, jsonBody, headers, "POST", CONFIG.HTTP_TIMEOUT)
     if not result then
-        return nil, "Impossible de contacter le serveur : " .. serverUrl
+        return nil, "Impossible de contacter le serveur : " .. normalizedServerUrl
     end
 
     -- Reponse XMP directe
@@ -663,8 +676,14 @@ local function showMainDialog(photos)
                 },
                 f:row {
                     visible = LrBinding.negativeOfKey(props, 'directApi'),
-                    f:static_text { title = "URL serveur :", width = LrView.share('lbl') },
+                    f:static_text { title = "URL complete du serveur :", width = LrView.share('lbl') },
                     f:edit_field { value = LrBinding.bindProperty(props, 'serverUrl'), width_in_chars = 35 },
+                },
+                f:static_text {
+                    visible = LrBinding.negativeOfKey(props, 'directApi'),
+                    title = "Exemple : http://localhost:3000",
+                    font  = "<system/small>",
+                    text_color = LrView.resource('disabled_text_color'),
                 },
                 f:row {
                     visible = LrBinding.bindProperty(props, 'directApi'),
@@ -707,6 +726,13 @@ local function showMainDialog(photos)
         LrDialogs.message("Erreur", "Entrez votre cle API Claude.", "critical")
         return nil
     end
+    if not props.directApi and not isValidServerUrl(props.serverUrl) then
+        LrDialogs.message("Erreur",
+            "Entrez l'URL complete du serveur, par exemple :\nhttp://localhost:3000", "critical")
+        return nil
+    end
+
+    props.serverUrl = normalizeServerUrl(props.serverUrl)
 
     savePrefs({
         apiKey      = props.apiKey,

@@ -195,13 +195,13 @@ Si vous ne voulez pas démarrer un serveur Node.js, vous pouvez configurer le pl
 > Note : Lightroom Classic a des limitations sur les requêtes HTTP très volumineuses.
 > Pour les photos haute résolution, le serveur Node.js est recommandé.
 
-### Changer le port du serveur
+### Changer l'URL du serveur
 
 ```bash
 PORT=3001 make dev
 ```
 
-Puis dans le plugin : Configuration avancée → URL serveur → `http://localhost:3001`
+Puis dans le plugin : Configuration avancée → URL complète du serveur → `http://localhost:3001`
 
 ### Logs du serveur
 
