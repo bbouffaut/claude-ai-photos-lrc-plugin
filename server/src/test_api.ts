@@ -15,12 +15,14 @@ const ARG5 = process.argv[5];
 const request = (method: string, url: string, body?: string): Promise<RequestResult> =>
     new Promise((resolve, reject) => {
         const parsedUrl = new URL(url);
+        const hostname = parsedUrl.hostname;
         const req = http.request(
             {
-                hostname: parsedUrl.hostname,
+                hostname,
                 port: parsedUrl.port ? Number(parsedUrl.port) : 80,
                 path: parsedUrl.pathname,
                 method,
+                family: hostname === 'localhost' ? 4 : undefined,
                 headers: body
                     ? {
                           'Content-Type': 'application/json',
