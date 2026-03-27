@@ -29,7 +29,7 @@ local LrProgressScope     = import 'LrProgressScope'
 local LrTasks             = import 'LrTasks'
 local LrView              = import 'LrView'
 local LrBinding           = import 'LrBinding'
-local LrObservableTable   = import 'LrObservableTable'
+local LrFunctionContext   = import 'LrFunctionContext'
 
 local logger = LrLogger('ClaudePhotoPlugin')
 logger:enable('logfile')
@@ -477,49 +477,50 @@ end
 -- Dialogue principal v2
 -- ============================================================
 local function showMainDialog(photos)
-    local prefs = getPrefs()
-    local f     = LrView.osFactory()
-    local props = LrObservableTable.new()
+    return LrFunctionContext.callWithContext("showMainDialog", function(context)
+        local prefs = getPrefs()
+        local f     = LrView.osFactory()
+        local props = LrBinding.makePropertyTable(context)
 
-    props.mode         = prefs.lastMode or "prompt"
-    props.prompt       = "Rends cette photo plus chaleureuse et dramatique"
-    props.refPath      = prefs.lastRefPath or ""
-    props.directApi    = prefs.directApi
-    props.apiKey       = prefs.apiKey
-    props.serverUrl    = prefs.serverUrl
-    props.showAdvanced = false
+        props.mode         = prefs.lastMode or "prompt"
+        props.prompt       = "Rends cette photo plus chaleureuse et dramatique"
+        props.refPath      = prefs.lastRefPath or ""
+        props.directApi    = prefs.directApi
+        props.apiKey       = prefs.apiKey
+        props.serverUrl    = prefs.serverUrl
+        props.showAdvanced = false
 
-    local suggestions = {
-        "Style cinematique : desaturation douce, ombres bleutees, hautes lumieres chaudes (teal & orange)",
-        "Portrait naturel : peaux veloutees, yeux tres nets, fond desature pour isoler le sujet",
-        "Paysage dramatique : ciel contraste, hautes lumieres recuperees, vibrance et clarte elevees",
-        "Golden hour : tons tres chauds, ombres remontees, contraste doux et lumineux",
-        "Noir et blanc expressif : fort contraste, grain subtil, courbe en S marquee",
-        "Style film vintage : vignettage, grain, teintes delavees, ombres tirant vers le marron",
-        "Correction minimale : exposition +0.5 stop, recup hautes lumieres, reduction bruit",
-    }
-
-    local function validateRef(p)
-        return p and p ~= "" and LrFileUtils.exists(p)
-    end
-
-    local function browseForRef()
-        local paths = LrDialogs.runOpenPanel {
-            title                   = "Choisir la photo modele",
-            canChooseFiles          = true,
-            canChooseDirectories    = false,
-            allowsMultipleSelection = false,
-            fileTypes               = { "jpg","jpeg","png","tif","tiff","bmp",
-                                        "nef","cr2","cr3","arw","dng","raf","rw2","orf","pef","srw" },
+        local suggestions = {
+            "Style cinematique : desaturation douce, ombres bleutees, hautes lumieres chaudes (teal & orange)",
+            "Portrait naturel : peaux veloutees, yeux tres nets, fond desature pour isoler le sujet",
+            "Paysage dramatique : ciel contraste, hautes lumieres recuperees, vibrance et clarte elevees",
+            "Golden hour : tons tres chauds, ombres remontees, contraste doux et lumineux",
+            "Noir et blanc expressif : fort contraste, grain subtil, courbe en S marquee",
+            "Style film vintage : vignettage, grain, teintes delavees, ombres tirant vers le marron",
+            "Correction minimale : exposition +0.5 stop, recup hautes lumieres, reduction bruit",
         }
-        if paths and #paths > 0 then
-            props.refPath = paths[1]
-        end
-    end
 
-    local contents = f:column {
-        spacing = f:dialog_spacing(),
-        bind_to_object = props,
+        local function validateRef(p)
+            return p and p ~= "" and LrFileUtils.exists(p)
+        end
+
+        local function browseForRef()
+            local paths = LrDialogs.runOpenPanel {
+                title                   = "Choisir la photo modele",
+                canChooseFiles          = true,
+                canChooseDirectories    = false,
+                allowsMultipleSelection = false,
+                fileTypes               = { "jpg","jpeg","png","tif","tiff","bmp",
+                                            "nef","cr2","cr3","arw","dng","raf","rw2","orf","pef","srw" },
+            }
+            if paths and #paths > 0 then
+                props.refPath = paths[1]
+            end
+        end
+
+        local contents = f:column {
+            spacing = f:dialog_spacing(),
+            bind_to_object = props,
 
         -- En-tete
         f:row {
@@ -531,7 +532,6 @@ local function showMainDialog(photos)
             f:static_text {
                 title = string.format("%d photo(s)", #photos),
                 font  = "<system/small>",
-                text_color = LrView.resource('disabled_text_color'),
             },
         },
 
@@ -544,18 +544,18 @@ local function showMainDialog(photos)
                 spacing = f:label_spacing(),
                 f:radio_button {
                     title         = "Instructions textuelles",
-                    value         = "prompt",
-                    checked_value = LrBinding.bindProperty(props, 'mode'),
+                    checked_value = "prompt",
+                    value         = LrView.bind('mode'),
                 },
                 f:radio_button {
                     title         = "Photo modele — reproduire son style",
-                    value         = "reference",
-                    checked_value = LrBinding.bindProperty(props, 'mode'),
+                    checked_value = "reference",
+                    value         = LrView.bind('mode'),
                 },
                 f:radio_button {
                     title         = "Photo modele + instructions complementaires",
-                    value         = "both",
-                    checked_value = LrBinding.bindProperty(props, 'mode'),
+                    checked_value = "both",
+                    value         = LrView.bind('mode'),
                 },
             },
         },
@@ -563,17 +563,19 @@ local function showMainDialog(photos)
         -- Bloc photo modele
         f:group_box {
             title   = "Photo modele",
-            visible = LrBinding.keyIsNotEqualToValue(props, 'mode', "prompt"),
+            visible = LrView.bind {
+                key = 'mode',
+                transform = function(value) return value ~= "prompt" end,
+            },
             f:column {
                 spacing = f:label_spacing(),
                 f:static_text {
                     title = "Selectionnez l'image dont le style sera analyse et reproduit :",
                     font  = "<system/small>",
-                    text_color = LrView.resource('disabled_text_color'),
                 },
                 f:row {
                     f:edit_field {
-                        value          = LrBinding.bindProperty(props, 'refPath'),
+                        value          = LrView.bind('refPath'),
                         width_in_chars = 42,
                         immediate      = true,
                     },
@@ -584,9 +586,9 @@ local function showMainDialog(photos)
                 },
                 f:row {
                     f:static_text {
-                        title = LrBinding.andAllKeys(
-                            LrBinding.bindProperty(props, 'refPath'),
-                            function(p)
+                        title = LrView.bind {
+                            key = 'refPath',
+                            transform = function(p)
                                 if not p or p == "" then
                                     return "Aucun fichier selectionne"
                                 elseif LrFileUtils.exists(p) then
@@ -594,16 +596,14 @@ local function showMainDialog(photos)
                                 else
                                     return "Fichier introuvable : " .. p
                                 end
-                            end
-                        ),
+                            end,
+                        },
                         font = "<system/small>",
-                        text_color = LrView.resource('disabled_text_color'),
                     },
                 },
                 f:static_text {
                     title = "Formats : JPEG, PNG, TIFF, RAW (NEF/CR2/CR3/ARW/DNG/RAF...)",
                     font  = "<system/small>",
-                    text_color = LrView.resource('disabled_text_color'),
                 },
             },
         },
@@ -611,16 +611,18 @@ local function showMainDialog(photos)
         -- Bloc instructions texte
         f:group_box {
             title   = "Instructions",
-            visible = LrBinding.keyIsNotEqualToValue(props, 'mode', "reference"),
+            visible = LrView.bind {
+                key = 'mode',
+                transform = function(value) return value ~= "reference" end,
+            },
             f:column {
                 spacing = f:label_spacing(),
                 f:static_text {
                     title = "Decrivez les modifications souhaitees :",
                     font  = "<system/small>",
-                    text_color = LrView.resource('disabled_text_color'),
                 },
                 f:edit_field {
-                    value           = LrBinding.bindProperty(props, 'prompt'),
+                    value           = LrView.bind('prompt'),
                     width_in_chars  = 55,
                     height_in_lines = 3,
                     wraps           = true,
@@ -628,7 +630,6 @@ local function showMainDialog(photos)
                 f:static_text {
                     title = "Suggestions :",
                     font  = "<system/small>",
-                    text_color = LrView.resource('disabled_text_color'),
                 },
                 f:column {
                     spacing = f:label_spacing(),
@@ -658,95 +659,101 @@ local function showMainDialog(photos)
 
         f:group_box {
             title   = "API",
-            visible = LrBinding.bindProperty(props, 'showAdvanced'),
+            visible = LrView.bind('showAdvanced'),
             f:column {
                 spacing = f:label_spacing(),
                 f:radio_button {
                     title         = "Serveur local Node.js (recommande)",
-                    value         = false,
-                    checked_value = LrBinding.bindProperty(props, 'directApi'),
+                    checked_value = false,
+                    value         = LrView.bind('directApi'),
                 },
                 f:radio_button {
                     title         = "Appel API direct",
-                    value         = true,
-                    checked_value = LrBinding.bindProperty(props, 'directApi'),
+                    checked_value = true,
+                    value         = LrView.bind('directApi'),
                 },
                 f:row {
-                    visible = LrBinding.negativeOfKey(props, 'directApi'),
-                    f:static_text { title = "URL complete du serveur :", width = LrView.share('lbl') },
-                    f:edit_field { value = LrBinding.bindProperty(props, 'serverUrl'), width_in_chars = 35 },
+                    visible = LrView.bind {
+                        key = 'directApi',
+                        transform = function(value) return not value end,
+                    },
+                    f:static_text { title = "URL complete du serveur :", width = 140 },
+                    f:edit_field { value = LrView.bind('serverUrl'), width_in_chars = 35 },
                 },
                 f:static_text {
-                    visible = LrBinding.negativeOfKey(props, 'directApi'),
+                    visible = LrView.bind {
+                        key = 'directApi',
+                        transform = function(value) return not value end,
+                    },
                     title = "Exemple : http://localhost:3000",
                     font  = "<system/small>",
-                    text_color = LrView.resource('disabled_text_color'),
                 },
                 f:row {
-                    visible = LrBinding.bindProperty(props, 'directApi'),
-                    f:static_text { title = "Cle API Claude :", width = LrView.share('lbl') },
-                    f:password_field { value = LrBinding.bindProperty(props, 'apiKey'), width_in_chars = 35 },
+                    visible = LrView.bind('directApi'),
+                    f:static_text { title = "Cle API Claude :", width = 140 },
+                    f:password_field { value = LrView.bind('apiKey'), width_in_chars = 35 },
                 },
             },
         },
-    }
+        }
 
-    local result = LrDialogs.presentModalDialog {
-        title      = "Claude Photo AI  v2",
-        contents   = contents,
-        actionVerb = "Analyser et Developper",
-        cancelVerb = "Annuler",
-    }
+        local result = LrDialogs.presentModalDialog {
+            title      = "Claude Photo AI  v2",
+            contents   = contents,
+            actionVerb = "Analyser et Developper",
+            cancelVerb = "Annuler",
+        }
 
-    if result ~= 'ok' then return nil end
+        if result ~= 'ok' then return nil end
 
-    local mode = props.mode
+        local mode = props.mode
 
-    -- Validations
-    if mode == "reference" or mode == "both" then
-        if not props.refPath or props.refPath == "" then
-            LrDialogs.message("Erreur", "Selectionnez une photo modele.", "critical")
+        -- Validations
+        if mode == "reference" or mode == "both" then
+            if not props.refPath or props.refPath == "" then
+                LrDialogs.message("Erreur", "Selectionnez une photo modele.", "critical")
+                return nil
+            end
+            if not LrFileUtils.exists(props.refPath) then
+                LrDialogs.message("Erreur", "Photo modele introuvable :\n" .. props.refPath, "critical")
+                return nil
+            end
+        end
+        if mode == "prompt" or mode == "both" then
+            if not props.prompt or props.prompt:match("^%s*$") then
+                LrDialogs.message("Erreur", "Entrez des instructions.", "critical")
+                return nil
+            end
+        end
+        if props.directApi and (not props.apiKey or props.apiKey == "") then
+            LrDialogs.message("Erreur", "Entrez votre cle API Claude.", "critical")
             return nil
         end
-        if not LrFileUtils.exists(props.refPath) then
-            LrDialogs.message("Erreur", "Photo modele introuvable :\n" .. props.refPath, "critical")
+        if not props.directApi and not isValidServerUrl(props.serverUrl) then
+            LrDialogs.message("Erreur",
+                "Entrez l'URL complete du serveur, par exemple :\nhttp://localhost:3000", "critical")
             return nil
         end
-    end
-    if mode == "prompt" or mode == "both" then
-        if not props.prompt or props.prompt:match("^%s*$") then
-            LrDialogs.message("Erreur", "Entrez des instructions.", "critical")
-            return nil
-        end
-    end
-    if props.directApi and (not props.apiKey or props.apiKey == "") then
-        LrDialogs.message("Erreur", "Entrez votre cle API Claude.", "critical")
-        return nil
-    end
-    if not props.directApi and not isValidServerUrl(props.serverUrl) then
-        LrDialogs.message("Erreur",
-            "Entrez l'URL complete du serveur, par exemple :\nhttp://localhost:3000", "critical")
-        return nil
-    end
 
-    props.serverUrl = normalizeServerUrl(props.serverUrl)
+        props.serverUrl = normalizeServerUrl(props.serverUrl)
 
-    savePrefs({
-        apiKey      = props.apiKey,
-        serverUrl   = props.serverUrl,
-        directApi   = props.directApi,
-        lastRefPath = props.refPath,
-        lastMode    = mode,
-    })
+        savePrefs({
+            apiKey      = props.apiKey,
+            serverUrl   = props.serverUrl,
+            directApi   = props.directApi,
+            lastRefPath = props.refPath,
+            lastMode    = mode,
+        })
 
-    return {
-        mode      = mode,
-        prompt    = props.prompt,
-        refPath   = props.refPath,
-        directApi = props.directApi,
-        apiKey    = props.apiKey,
-        serverUrl = props.serverUrl,
-    }
+        return {
+            mode      = mode,
+            prompt    = props.prompt,
+            refPath   = props.refPath,
+            directApi = props.directApi,
+            apiKey    = props.apiKey,
+            serverUrl = props.serverUrl,
+        }
+    end)
 end
 
 -- ============================================================
@@ -790,7 +797,6 @@ local function showResultDialog(xmpContent, xmpPath, mode)
         f:static_text {
             title = "Mode : " .. (modeLabels[mode] or mode) .. "   " .. #lines .. " parametre(s)",
             font  = "<system/small>",
-            text_color = LrView.resource('disabled_text_color'),
         },
         f:separator { fill_horizontal = 1 },
         f:edit_field {
@@ -804,7 +810,6 @@ local function showResultDialog(xmpContent, xmpPath, mode)
         f:static_text {
             title = xmpPath,
             font  = "<system/small>",
-            text_color = LrView.resource('disabled_text_color'),
         },
     }
 
@@ -862,70 +867,70 @@ local function processPhotos(photos, config)
         local photoName = LrPathUtils.leafName(photo:getRawMetadata('path'))
         progress:setPortionComplete(i - 1, #photos)
 
-        -- 1. Export JPEG
-        progress:setCaption(string.format("[%d/%d] Export JPEG : %s", i, #photos, photoName))
-        local jpegPath, exportErr = exportPhotoToJpeg(photo, tmpDir)
-        if not jpegPath then
-            table.insert(results.errors, photoName .. " : export echoue (" .. (exportErr or "?") .. ")")
-            results.failed = results.failed + 1
-            goto continue
-        end
-
-        -- 2. Encodage base64
-        progress:setCaption(string.format("[%d/%d] Encodage : %s", i, #photos, photoName))
-        local imageBase64, encErr = fileToBase64(jpegPath)
-        if not imageBase64 then
-            table.insert(results.errors, photoName .. " : encodage echoue (" .. (encErr or "?") .. ")")
-            results.failed = results.failed + 1
-            goto continue
-        end
-
-        -- 3. Appel Claude
-        progress:setCaption(string.format("[%d/%d] Claude AI : %s", i, #photos, photoName))
-        local xmpContent, apiErr
-
-        if config.directApi then
-            xmpContent, apiErr = callClaudeDirectly(
-                imageBase64, refBase64, config.mode, config.prompt, config.apiKey)
-        else
-            xmpContent, apiErr = callClaudeViaServer(
-                imageBase64, refBase64, config.mode, config.prompt, config.serverUrl)
-        end
-
-        if not xmpContent then
-            table.insert(results.errors, photoName .. " : " .. (apiErr or "erreur API inconnue"))
-            results.failed = results.failed + 1
-            goto continue
-        end
-
-        -- Validation minimale
-        if not isLikelyXmp(xmpContent) then
-            logger:error("Reponse non-XMP pour " .. photoName .. " : " .. xmpContent:sub(1, 400))
-            table.insert(results.errors, photoName .. " : reponse invalide (XMP Lightroom non detecte)")
-            results.failed = results.failed + 1
-            goto continue
-        end
-
-        -- 4. Application dans Lightroom
-        progress:setCaption(string.format("[%d/%d] Application : %s", i, #photos, photoName))
-        local ok, applyErr, xmpPath = applyXmpToPhoto(photo, xmpContent, tmpDir)
-
-        if ok then
-            results.success = results.success + 1
-            if i == 1 then
-                local cap_xmp  = xmpContent
-                local cap_path = xmpPath
-                local cap_mode = config.mode
-                LrTasks.startAsyncTask(function()
-                    showResultDialog(cap_xmp, cap_path, cap_mode)
-                end)
+        repeat
+            -- 1. Export JPEG
+            progress:setCaption(string.format("[%d/%d] Export JPEG : %s", i, #photos, photoName))
+            local jpegPath, exportErr = exportPhotoToJpeg(photo, tmpDir)
+            if not jpegPath then
+                table.insert(results.errors, photoName .. " : export echoue (" .. (exportErr or "?") .. ")")
+                results.failed = results.failed + 1
+                break
             end
-        else
-            table.insert(results.errors, photoName .. " : application echouee (" .. (applyErr or "?") .. ")")
-            results.failed = results.failed + 1
-        end
 
-        ::continue::
+            -- 2. Encodage base64
+            progress:setCaption(string.format("[%d/%d] Encodage : %s", i, #photos, photoName))
+            local imageBase64, encErr = fileToBase64(jpegPath)
+            if not imageBase64 then
+                table.insert(results.errors, photoName .. " : encodage echoue (" .. (encErr or "?") .. ")")
+                results.failed = results.failed + 1
+                break
+            end
+
+            -- 3. Appel Claude
+            progress:setCaption(string.format("[%d/%d] Claude AI : %s", i, #photos, photoName))
+            local xmpContent, apiErr
+
+            if config.directApi then
+                xmpContent, apiErr = callClaudeDirectly(
+                    imageBase64, refBase64, config.mode, config.prompt, config.apiKey)
+            else
+                xmpContent, apiErr = callClaudeViaServer(
+                    imageBase64, refBase64, config.mode, config.prompt, config.serverUrl)
+            end
+
+            if not xmpContent then
+                table.insert(results.errors, photoName .. " : " .. (apiErr or "erreur API inconnue"))
+                results.failed = results.failed + 1
+                break
+            end
+
+            -- Validation minimale
+            if not isLikelyXmp(xmpContent) then
+                logger:error("Reponse non-XMP pour " .. photoName .. " : " .. xmpContent:sub(1, 400))
+                table.insert(results.errors, photoName .. " : reponse invalide (XMP Lightroom non detecte)")
+                results.failed = results.failed + 1
+                break
+            end
+
+            -- 4. Application dans Lightroom
+            progress:setCaption(string.format("[%d/%d] Application : %s", i, #photos, photoName))
+            local ok, applyErr, xmpPath = applyXmpToPhoto(photo, xmpContent, tmpDir)
+
+            if ok then
+                results.success = results.success + 1
+                if i == 1 then
+                    local cap_xmp  = xmpContent
+                    local cap_path = xmpPath
+                    local cap_mode = config.mode
+                    LrTasks.startAsyncTask(function()
+                        showResultDialog(cap_xmp, cap_path, cap_mode)
+                    end)
+                end
+            else
+                table.insert(results.errors, photoName .. " : application echouee (" .. (applyErr or "?") .. ")")
+                results.failed = results.failed + 1
+            end
+        until true
     end
 
     progress:done()
