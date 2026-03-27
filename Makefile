@@ -2,7 +2,7 @@ YARN ?= yarn
 SERVER_DIR := server
 TEST_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 
-.PHONY: install build dev start health test clean
+.PHONY: install build dev start prod health test clean
 
 install:
 	$(YARN) --cwd $(SERVER_DIR) install
@@ -13,8 +13,11 @@ build:
 dev:
 	$(YARN) --cwd $(SERVER_DIR) dev
 
-start: build
+start:
 	$(YARN) --cwd $(SERVER_DIR) start
+
+prod: build
+	NODE_ENV=production $(YARN) --cwd $(SERVER_DIR) start
 
 health:
 	curl http://localhost:3000/health

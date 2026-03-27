@@ -152,6 +152,7 @@ make install   # installe les dépendances Yarn du serveur
 make dev       # lance le serveur TypeScript en mode watch
 make build     # compile TypeScript vers server/dist
 make start     # compile puis lance la version JS compilée
+make prod      # compile puis lance le serveur en mode production
 make test      # exécute le script de test local
 make health    # vérifie le endpoint /health
 make clean     # supprime server/dist
