@@ -34,6 +34,7 @@ local unpack              = unpack or table.unpack
 
 local logger = LrLogger('ClaudePhotoPlugin')
 logger:enable('logfile')
+local logInfo, logWarn, logError
 
 local function safeSnippet(value, limit)
     if value == nil then return "<nil>" end
@@ -63,6 +64,85 @@ local function normalizeDebugLogPath(path)
     return path:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local function getCacheDir()
+    local appData = LrPathUtils.getStandardFilePath('appData')
+    if appData and appData ~= "" then
+        local lightroomDir = LrPathUtils.child(appData, 'Adobe/Lightroom')
+        if LrFileUtils.exists(lightroomDir) then
+            local cacheDir = LrPathUtils.child(lightroomDir, 'ClaudePhotoCache')
+            if not LrFileUtils.exists(cacheDir) then
+                LrFileUtils.createAllDirectories(cacheDir)
+            end
+            return cacheDir
+        end
+    end
+
+    local fallback = LrPathUtils.child(LrPathUtils.getStandardFilePath('temp'), 'ClaudePhotoCache')
+    if not LrFileUtils.exists(fallback) then
+        LrFileUtils.createAllDirectories(fallback)
+    end
+    return fallback
+end
+
+local function hashString(value)
+    local hash = 2166136261
+    for i = 1, #value do
+        hash = (hash * 16777619) % 4294967296
+        hash = (hash + value:byte(i)) % 4294967296
+    end
+    return string.format("%08x", hash)
+end
+
+local function readFile(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
+local function buildCacheKey(photoPath, config)
+    return table.concat({
+        "photo=" .. tostring(photoPath or ""),
+        "mode=" .. tostring(config.mode or ""),
+        "prompt=" .. tostring(config.prompt or ""),
+        "refPath=" .. tostring(config.refPath or ""),
+    }, "\n")
+end
+
+local function getCacheFilePath(photoPath, config)
+    return LrPathUtils.child(getCacheDir(), hashString(buildCacheKey(photoPath, config)) .. ".xmp")
+end
+
+local function getCachedXmp(photoPath, config)
+    local cacheFile = getCacheFilePath(photoPath, config)
+    if not LrFileUtils.exists(cacheFile) then
+        return nil, cacheFile
+    end
+
+    local content = readFile(cacheFile)
+    if content and content ~= "" then
+        logInfo("Cache hit for photo=" .. tostring(photoPath) .. " -> " .. tostring(cacheFile))
+        return content, cacheFile
+    end
+
+    logWarn("Cache file exists but is empty/unreadable: " .. tostring(cacheFile))
+    return nil, cacheFile
+end
+
+local function saveCachedXmp(photoPath, config, xmpContent)
+    local cacheFile = getCacheFilePath(photoPath, config)
+    local f = io.open(cacheFile, "w")
+    if not f then
+        logWarn("Failed to open cache file for writing: " .. tostring(cacheFile))
+        return cacheFile
+    end
+    f:write(xmpContent)
+    f:close()
+    logInfo("Cache stored for photo=" .. tostring(photoPath) .. " -> " .. tostring(cacheFile))
+    return cacheFile
+end
+
 local function getDebugLogPath()
     local prefs = import 'LrPrefs'
     local p = prefs.prefsForPlugin()
@@ -87,13 +167,13 @@ local function appendDebugLog(line)
     f:close()
 end
 
-local function logInfo(message)
+logInfo = function(message)
     local line = "[ClaudePhoto] " .. tostring(message)
     logger:info(line)
     appendDebugLog(line)
 end
 
-local function logWarn(message)
+logWarn = function(message)
     local line = "[ClaudePhoto] " .. tostring(message)
     if logger.warn then
         logger:warn(line)
@@ -103,7 +183,7 @@ local function logWarn(message)
     appendDebugLog(line)
 end
 
-local function logError(message)
+logError = function(message)
     local line = "[ClaudePhoto] " .. tostring(message)
     logger:error(line)
     appendDebugLog(line)
@@ -1081,7 +1161,8 @@ local function processPhotos(photos, config)
         .. ", directApi=" .. tostring(config.directApi)
         .. ", serverUrl=" .. safeSnippet(config.serverUrl, 120)
         .. ", hasApiKey=" .. tostring((config.apiKey or "") ~= "")
-        .. ", refPath=" .. safeSnippet(config.refPath, 180))
+        .. ", refPath=" .. safeSnippet(config.refPath, 180)
+        .. ", cacheDir=" .. safeSnippet(getCacheDir(), 220))
 
     -- Preparer la photo modele UNE SEULE FOIS pour tout le lot
     local refBase64 = nil
@@ -1129,6 +1210,8 @@ local function processPhotos(photos, config)
         progress:setPortionComplete(i - 1, #photos)
 
         repeat
+            local cachedXmp, cacheFile = getCachedXmp(photo:getRawMetadata('path'), config)
+
             -- 1. Export JPEG
             progress:setCaption(string.format("[%d/%d] Export JPEG : %s", i, #photos, photoName))
             local jpegPath, exportErr = exportPhotoToJpeg(photo, tmpDir)
@@ -1152,13 +1235,17 @@ local function processPhotos(photos, config)
             -- 3. Appel Claude
             progress:setCaption(string.format("[%d/%d] Claude AI : %s", i, #photos, photoName))
             local xmpContent, apiErr
-
-            if config.directApi then
-                xmpContent, apiErr = callClaudeDirectly(
-                    imageBase64, refBase64, config.mode, config.prompt, config.apiKey)
+            if cachedXmp then
+                xmpContent = cachedXmp
+                logInfo("Using cached XMP for " .. tostring(photoName) .. ": " .. tostring(cacheFile))
             else
-                xmpContent, apiErr = callClaudeViaServer(
-                    imageBase64, refBase64, config.mode, config.prompt, config.serverUrl)
+                if config.directApi then
+                    xmpContent, apiErr = callClaudeDirectly(
+                        imageBase64, refBase64, config.mode, config.prompt, config.apiKey)
+                else
+                    xmpContent, apiErr = callClaudeViaServer(
+                        imageBase64, refBase64, config.mode, config.prompt, config.serverUrl)
+                end
             end
 
             if not xmpContent then
@@ -1175,6 +1262,9 @@ local function processPhotos(photos, config)
                 table.insert(results.errors, photoName .. " : reponse invalide (XMP Lightroom non detecte)")
                 results.failed = results.failed + 1
                 break
+            end
+            if not cachedXmp then
+                saveCachedXmp(photo:getRawMetadata('path'), config, xmpContent)
             end
 
             -- 4. Application dans Lightroom
