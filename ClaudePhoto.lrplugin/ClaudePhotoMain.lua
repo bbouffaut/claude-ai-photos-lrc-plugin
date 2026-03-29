@@ -30,6 +30,7 @@ local LrTasks             = import 'LrTasks'
 local LrView              = import 'LrView'
 local LrBinding           = import 'LrBinding'
 local LrFunctionContext   = import 'LrFunctionContext'
+local unpack              = unpack or table.unpack
 
 local logger = LrLogger('ClaudePhotoPlugin')
 logger:enable('logfile')
@@ -643,7 +644,7 @@ local function showMainDialog(photos)
                                 action = function() props.prompt = s end,
                             })
                         end
-                        return table.unpack(btns)
+                        return unpack(btns)
                     end)()
                 },
             },
