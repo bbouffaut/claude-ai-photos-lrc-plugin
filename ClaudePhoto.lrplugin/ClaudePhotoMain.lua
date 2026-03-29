@@ -35,6 +35,80 @@ local unpack              = unpack or table.unpack
 local logger = LrLogger('ClaudePhotoPlugin')
 logger:enable('logfile')
 
+local function safeSnippet(value, limit)
+    if value == nil then return "<nil>" end
+    local s = tostring(value):gsub("[%c]+", " ")
+    limit = limit or 200
+    if #s > limit then
+        s = s:sub(1, limit) .. "..."
+    end
+    return s
+end
+
+local function getDefaultDebugLogPath()
+    local appData = LrPathUtils.getStandardFilePath('appData')
+    if appData and appData ~= "" then
+        local lightroomDir = LrPathUtils.child(appData, 'Adobe/Lightroom')
+        if LrFileUtils.exists(lightroomDir) then
+            return LrPathUtils.child(lightroomDir, 'ClaudePhoto_debug.log')
+        end
+    end
+
+    local fallback = LrPathUtils.getStandardFilePath('temp')
+    return LrPathUtils.child(fallback, 'ClaudePhoto_debug.log')
+end
+
+local function normalizeDebugLogPath(path)
+    if not path then return "" end
+    return path:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function getDebugLogPath()
+    local prefs = import 'LrPrefs'
+    local p = prefs.prefsForPlugin()
+    local configured = normalizeDebugLogPath(p.debugLogPath or "")
+    if configured ~= "" then
+        return configured
+    end
+    return getDefaultDebugLogPath()
+end
+
+local function appendDebugLog(line)
+    local path = getDebugLogPath()
+    local f = io.open(path, "a")
+    if not f then
+        local fallback = LrPathUtils.child(LrPathUtils.getStandardFilePath('temp'), 'ClaudePhoto_debug.log')
+        if fallback ~= path then
+            f = io.open(fallback, "a")
+        end
+    end
+    if not f then return end
+    f:write(os.date("%Y-%m-%d %H:%M:%S") .. " " .. tostring(line) .. "\n")
+    f:close()
+end
+
+local function logInfo(message)
+    local line = "[ClaudePhoto] " .. tostring(message)
+    logger:info(line)
+    appendDebugLog(line)
+end
+
+local function logWarn(message)
+    local line = "[ClaudePhoto] " .. tostring(message)
+    if logger.warn then
+        logger:warn(line)
+    else
+        logger:info(line)
+    end
+    appendDebugLog(line)
+end
+
+local function logError(message)
+    local line = "[ClaudePhoto] " .. tostring(message)
+    logger:error(line)
+    appendDebugLog(line)
+end
+
 -- ============================================================
 -- Configuration
 -- ============================================================
@@ -53,13 +127,21 @@ local CONFIG = {
 local function getPrefs()
     local prefs = import 'LrPrefs'
     local p = prefs.prefsForPlugin()
-    return {
+    local values = {
         apiKey      = p.apiKey      or "",
         serverUrl   = p.serverUrl   or CONFIG.SERVER_URL,
         directApi   = p.directApi   or false,
         lastRefPath = p.lastRefPath or "",
         lastMode    = p.lastMode    or "prompt",
+        debugLogPath = normalizeDebugLogPath(p.debugLogPath or ""),
     }
+    logInfo("Prefs loaded: mode=" .. tostring(values.lastMode)
+        .. ", directApi=" .. tostring(values.directApi)
+        .. ", serverUrl=" .. safeSnippet(values.serverUrl, 120)
+        .. ", hasApiKey=" .. tostring(values.apiKey ~= "")
+        .. ", refPath=" .. safeSnippet(values.lastRefPath, 180)
+        .. ", debugLogPath=" .. safeSnippet(values.debugLogPath ~= "" and values.debugLogPath or getDefaultDebugLogPath(), 220))
+    return values
 end
 
 local function savePrefs(t)
@@ -70,6 +152,13 @@ local function savePrefs(t)
     p.directApi   = t.directApi
     p.lastRefPath = t.lastRefPath or ""
     p.lastMode    = t.lastMode    or "prompt"
+    p.debugLogPath = normalizeDebugLogPath(t.debugLogPath or "")
+    logInfo("Prefs saved: mode=" .. tostring(t.lastMode)
+        .. ", directApi=" .. tostring(t.directApi)
+        .. ", serverUrl=" .. safeSnippet(t.serverUrl, 120)
+        .. ", hasApiKey=" .. tostring((t.apiKey or "") ~= "")
+        .. ", refPath=" .. safeSnippet(t.lastRefPath, 180)
+        .. ", debugLogPath=" .. safeSnippet(((t.debugLogPath or "") ~= "" and t.debugLogPath) or getDefaultDebugLogPath(), 220))
 end
 
 -- ============================================================
@@ -79,16 +168,19 @@ local function getTempDir()
     local base = LrPathUtils.getStandardFilePath('temp')
     local dir  = LrPathUtils.child(base, 'ClaudePhoto_' .. tostring(os.time()))
     LrFileUtils.createDirectory(dir)
+    logInfo("Temp dir created: " .. tostring(dir))
     return dir
 end
 
 local function cleanTempDir(dir)
     if dir and LrFileUtils.exists(dir) then
+        logInfo("Cleaning temp dir: " .. tostring(dir))
         LrFileUtils.delete(dir)
     end
 end
 
 local function writeFile(path, content)
+    logInfo("Writing file: " .. tostring(path) .. " (" .. tostring(content and #content or 0) .. " chars)")
     local f = io.open(path, "w")
     if not f then return false end
     f:write(content)
@@ -110,6 +202,7 @@ end
 
 -- Encodage base64 via commande systeme
 local function fileToBase64(filePath)
+    logInfo("Encoding file to base64: " .. tostring(filePath))
     local cmd
     if WIN_ENV then
         cmd = string.format(
@@ -119,11 +212,18 @@ local function fileToBase64(filePath)
         cmd = string.format('base64 -i "%s"', filePath)
     end
     local handle = io.popen(cmd)
-    if not handle then return nil, "Impossible d'encoder l'image" end
+    if not handle then
+        logError("fileToBase64: io.popen failed for " .. tostring(filePath))
+        return nil, "Impossible d'encoder l'image"
+    end
     local result = handle:read("*a")
     handle:close()
     result = result:gsub("%s+", "")
-    if #result < 100 then return nil, "Base64 vide ou trop court" end
+    if #result < 100 then
+        logError("fileToBase64: output too short for " .. tostring(filePath) .. " (" .. tostring(#result) .. " chars)")
+        return nil, "Base64 vide ou trop court"
+    end
+    logInfo("Base64 encoded: " .. tostring(filePath) .. " (" .. tostring(#result) .. " chars)")
     return result
 end
 
@@ -134,11 +234,17 @@ local function convertImageToJpeg(srcPath, outputDir, maxSize)
     local baseName = LrPathUtils.removeExtension(LrPathUtils.leafName(srcPath))
     local outPath  = LrPathUtils.child(outputDir, baseName .. '_ref.jpg')
 
+    logInfo("Converting reference image to JPEG: src=" .. tostring(srcPath)
+        .. ", ext=" .. tostring(ext)
+        .. ", maxSize=" .. tostring(maxSize)
+        .. ", out=" .. tostring(outPath))
+
     local cmd
     if WIN_ENV then
         -- ImageMagick (Windows) - a installer separement
         cmd = string.format('magick "%s" -resize %dx%d> -quality 85 "%s" 2>nul',
             srcPath, maxSize, maxSize, outPath)
+        logInfo("convertImageToJpeg command: " .. safeSnippet(cmd, 220))
         local ok = os.execute(cmd)
         if not ok or not LrFileUtils.exists(outPath) then
             -- Fallback PowerShell pour JPEG/PNG
@@ -153,6 +259,8 @@ local function convertImageToJpeg(srcPath, outputDir, maxSize)
                 '$g.DrawImage($img,0,0,$w,$h); ' ..
                 '$b.Save(\'%s\',[System.Drawing.Imaging.ImageFormat]::Jpeg)"',
                 srcPath, maxSize, maxSize, outPath)
+            logWarn("Primary conversion failed, trying PowerShell fallback")
+            logInfo("convertImageToJpeg fallback command: " .. safeSnippet(cmd, 220))
             os.execute(cmd)
         end
     else
@@ -160,6 +268,7 @@ local function convertImageToJpeg(srcPath, outputDir, maxSize)
         cmd = string.format(
             'sips -Z %d --setProperty format jpeg "%s" --out "%s" 2>/dev/null',
             maxSize, srcPath, outPath)
+        logInfo("convertImageToJpeg command: " .. safeSnippet(cmd, 220))
         local ok = os.execute(cmd)
         -- Pour les RAW non Apple (Nikon NEF, Sony ARW, etc.), sips echoue
         -- Fallback : dcraw ou rawtherapee si disponibles
@@ -167,17 +276,22 @@ local function convertImageToJpeg(srcPath, outputDir, maxSize)
             cmd = string.format(
                 'dcraw -c -w -T "%s" | sips -Z %d --setProperty format jpeg - --out "%s" 2>/dev/null',
                 srcPath, maxSize, outPath)
+            logWarn("Primary conversion failed, trying dcraw fallback")
+            logInfo("convertImageToJpeg fallback command: " .. safeSnippet(cmd, 220))
             os.execute(cmd)
         end
         if not LrFileUtils.exists(outPath) then
             -- Dernier recours : copie directe (si c'est un JPEG mal detecte)
+            logWarn("Fallback conversion failed, trying direct copy to " .. tostring(outPath))
             LrFileUtils.copy(srcPath, outPath)
         end
     end
 
     if LrFileUtils.exists(outPath) then
+        logInfo("Reference image converted successfully: " .. tostring(outPath))
         return outPath
     end
+    logError("Reference image conversion failed: src=" .. tostring(srcPath))
     return nil, "Impossible de convertir la photo modele en JPEG (format non supporte ?)"
 end
 
@@ -186,6 +300,10 @@ end
 -- ============================================================
 local function exportPhotoToJpeg(photo, outputDir, maxSize)
     maxSize = maxSize or CONFIG.MAX_IMAGE_SIZE
+    local photoPath = photo:getRawMetadata('path')
+    logInfo("Exporting photo to JPEG: " .. tostring(photoPath)
+        .. ", outputDir=" .. tostring(outputDir)
+        .. ", maxSize=" .. tostring(maxSize))
     local exportSettings = {
         LR_export_destinationType       = "specificFolder",
         LR_export_destinationPathPrefix = outputDir,
@@ -211,22 +329,26 @@ local function exportPhotoToJpeg(photo, outputDir, maxSize)
         exportSettings = exportSettings,
     })
 
-    local exportedPaths = {}
-    local success = false
     local errorMsg
+    local exportedPath
 
-    exportSession:doExportOnCurrentTask(function(info)
-        if info.name == 'exportedPhoto' then
-            table.insert(exportedPaths, info.path)
-            success = true
-        elseif info.name == 'exportFailed' then
-            errorMsg = info.error or "Export echoue"
+    for _, rendition in exportSession:renditions { stopIfCanceled = true } do
+        local success, pathOrMessage = rendition:waitForRender()
+        if success then
+            exportedPath = pathOrMessage
+            logInfo("Export produced file: " .. tostring(exportedPath))
+        else
+            errorMsg = pathOrMessage or "Export echoue"
+            logError("Export failed for " .. tostring(photoPath) .. ": " .. tostring(errorMsg))
         end
-    end)
-
-    if success and #exportedPaths > 0 then
-        return exportedPaths[1]
     end
+
+    if exportedPath and LrFileUtils.exists(exportedPath) then
+        logInfo("Export succeeded for " .. tostring(photoPath) .. ": " .. tostring(exportedPath))
+        return exportedPath
+    end
+
+    logError("Export did not produce a file for " .. tostring(photoPath) .. ": " .. tostring(errorMsg or "Aucune photo exportee"))
     return nil, errorMsg or "Aucune photo exportee"
 end
 
@@ -332,6 +454,11 @@ end
 -- ============================================================
 local function callClaudeDirectly(imageBase64, refBase64, mode, userPrompt, apiKey)
     local url = "https://api.anthropic.com/v1/messages"
+    logInfo("Calling Claude direct API: mode=" .. tostring(mode)
+        .. ", imageB64=" .. tostring(imageBase64 and #imageBase64 or 0)
+        .. ", refB64=" .. tostring(refBase64 and #refBase64 or 0)
+        .. ", promptLen=" .. tostring(userPrompt and #userPrompt or 0)
+        .. ", hasApiKey=" .. tostring(apiKey and apiKey ~= ""))
 
     -- Construction du contenu multi-images
     local contentParts = {}
@@ -365,8 +492,10 @@ local function callClaudeDirectly(imageBase64, refBase64, mode, userPrompt, apiK
 
     local result = LrHttp.post(url, jsonBody, headers, "POST", CONFIG.HTTP_TIMEOUT)
     if not result then
+        logError("Direct API call failed: no response from " .. tostring(url))
         return nil, "Erreur reseau : impossible de contacter l'API Claude"
     end
+    logInfo("Direct API raw response snippet: " .. safeSnippet(result, 400))
 
     -- Extraction du texte XMP depuis la reponse JSON
     local xmpContent = result:match('"text"%s*:%s*"(.-[^\\])"')
@@ -374,11 +503,12 @@ local function callClaudeDirectly(imageBase64, refBase64, mode, userPrompt, apiK
         xmpContent = result:match('"text":"(.+)"')
     end
     if not xmpContent then
-        logger:error("Reponse inattendue : " .. result:sub(1, 500))
+        logError("Direct API unexpected response: " .. safeSnippet(result, 500))
         return nil, "Reponse Claude non parsable. Verifiez la cle API.\n" .. result:sub(1, 200)
     end
 
     xmpContent = xmpContent:gsub('\\"','"'):gsub('\\n','\n'):gsub('\\t','\t'):gsub('\\r','\r'):gsub('\\\\','\\')
+    logInfo("Direct API extracted XMP snippet: " .. safeSnippet(xmpContent, 300))
     return xmpContent
 end
 
@@ -388,6 +518,11 @@ end
 local function callClaudeViaServer(imageBase64, refBase64, mode, userPrompt, serverUrl)
     local normalizedServerUrl = normalizeServerUrl(serverUrl)
     local url = normalizedServerUrl .. "/analyze"
+    logInfo("Calling local server: url=" .. tostring(url)
+        .. ", mode=" .. tostring(mode)
+        .. ", imageB64=" .. tostring(imageBase64 and #imageBase64 or 0)
+        .. ", refB64=" .. tostring(refBase64 and #refBase64 or 0)
+        .. ", promptLen=" .. tostring(userPrompt and #userPrompt or 0))
 
     local parts = {
         string.format('"image":"%s"', imageBase64),
@@ -406,21 +541,27 @@ local function callClaudeViaServer(imageBase64, refBase64, mode, userPrompt, ser
 
     local result = LrHttp.post(url, jsonBody, headers, "POST", CONFIG.HTTP_TIMEOUT)
     if not result then
+        logError("Local server call failed: no response from " .. tostring(url))
         return nil, "Impossible de contacter le serveur : " .. normalizedServerUrl
     end
+    logInfo("Local server raw response snippet: " .. safeSnippet(result, 400))
 
     -- Reponse XMP directe
     if isLikelyXmp(result) then
+        logInfo("Local server returned direct XMP")
         return result
     end
 
     -- Reponse JSON enveloppee
     local xmp = result:match('"xmp"%s*:%s*"(.-[^\\])"')
     if xmp then
-        return xmp:gsub('\\"','"'):gsub('\\n','\n'):gsub('\\\\','\\')
+        xmp = xmp:gsub('\\"','"'):gsub('\\n','\n'):gsub('\\\\','\\')
+        logInfo("Local server returned wrapped XMP snippet: " .. safeSnippet(xmp, 300))
+        return xmp
     end
 
     local errMsg = result:match('"error"%s*:%s*"(.-)"')
+    logError("Local server returned error/unexpected payload: " .. safeSnippet(errMsg or result, 300))
     return nil, errMsg or ("Reponse inattendue du serveur : " .. result:sub(1, 300))
 end
 
@@ -432,6 +573,15 @@ function parseXmpToParams(xmpContent)
     for name, value in xmpContent:gmatch('crs:([%w]+)%s*=%s*"([^"]*)"') do
         params[name] = tonumber(value) or value
     end
+    for name, value in xmpContent:gmatch("crs:([%w]+)%s*=%s*'([^']*)'") do
+        params[name] = tonumber(value) or value
+    end
+    local count = 0
+    for _ in pairs(params) do count = count + 1 end
+    logInfo("Parsed XMP params: " .. tostring(count))
+    if count == 0 then
+        logWarn("No parsable crs:* attributes found in XMP snippet: " .. safeSnippet(xmpContent, 400))
+    end
     return params
 end
 
@@ -439,8 +589,10 @@ local function applyXmpToPhoto(photo, xmpContent, tmpDir)
     local photoName = LrPathUtils.leafName(photo:getRawMetadata('path'))
     local baseName  = LrPathUtils.removeExtension(photoName)
     local xmpPath   = LrPathUtils.child(tmpDir, baseName .. '_claude.xmp')
+    logInfo("Applying XMP to photo: " .. tostring(photoName) .. ", xmpPath=" .. tostring(xmpPath))
 
     if not writeFile(xmpPath, xmpContent) then
+        logError("Failed to write temporary XMP: " .. tostring(xmpPath))
         return false, "Impossible d'ecrire le XMP temporaire", xmpPath
     end
 
@@ -451,26 +603,88 @@ local function applyXmpToPhoto(photo, xmpContent, tmpDir)
     catalog:withWriteAccessDo("Appliquer reglages Claude AI", function()
         local params = parseXmpToParams(xmpContent)
         if params and next(params) then
+            local applyParams = {}
+            local paramNames = {}
             for name, value in pairs(params) do
                 if name ~= "Version" and name ~= "ProcessVersion" and name ~= "WhiteBalance" then
-                    pcall(function() photo:applyDevelopSettings({ [name] = value }) end)
+                    applyParams[name] = value
+                    table.insert(paramNames, name)
                 end
             end
-            success = true
+
+            table.sort(paramNames)
+            logInfo("Attempting develop apply for " .. tostring(photoName)
+                .. " with " .. tostring(#paramNames) .. " param(s): "
+                .. safeSnippet(table.concat(paramNames, ", "), 350))
+
+            local batchOk, batchErr = LrTasks.pcall(function()
+                photo:applyDevelopSettings(applyParams)
+            end)
+
+            if batchOk then
+                logInfo("Batch applyDevelopSettings succeeded for " .. tostring(photoName)
+                    .. " with " .. tostring(#paramNames) .. " param(s)")
+                success = true
+            else
+                local appliedCount = 0
+                logWarn("Batch applyDevelopSettings failed for " .. tostring(photoName)
+                    .. ": " .. safeSnippet(batchErr, 220)
+                    .. ". Falling back to per-parameter apply.")
+
+                for _, name in ipairs(paramNames) do
+                    local value = applyParams[name]
+                    local ok, err = LrTasks.pcall(function()
+                        photo:applyDevelopSettings({ [name] = value })
+                    end)
+                    if ok then
+                        appliedCount = appliedCount + 1
+                        logInfo("Applied param for " .. tostring(photoName)
+                            .. ": " .. tostring(name) .. "=" .. safeSnippet(value, 80))
+                    else
+                        logWarn("applyDevelopSettings failed for " .. tostring(photoName)
+                            .. ", param=" .. tostring(name) .. ", value=" .. safeSnippet(value, 80)
+                            .. ", err=" .. safeSnippet(err, 180))
+                    end
+                end
+
+                logInfo("Applied develop settings to " .. tostring(photoName) .. ": " .. tostring(appliedCount) .. " param(s)")
+                if appliedCount > 0 then
+                    success = true
+                else
+                    errorMsg = "Aucun parametre Lightroom applicable dans le XMP recu"
+                    logError("No develop parameters could be applied for " .. tostring(photoName))
+                end
+            end
         else
             -- Fallback XMP sidecar
             local originalPath = photo:getRawMetadata('path')
             local sidecar = LrPathUtils.removeExtension(originalPath) .. '.xmp'
-            if LrFileUtils.copy(xmpPath, sidecar) then
+            logWarn("No direct params parsed, trying sidecar fallback: " .. tostring(sidecar))
+            if LrFileUtils.exists(sidecar) then
+                logInfo("Existing sidecar found, deleting before overwrite: " .. tostring(sidecar))
+                LrFileUtils.delete(sidecar)
+            end
+
+            local sidecarOk = writeFile(sidecar, xmpContent)
+            if sidecarOk then
                 catalog:autoSyncPhotos(false)
                 photo:readMetadataFromXmp()
+                logInfo("Sidecar fallback applied successfully: " .. tostring(sidecar))
                 success = true
             else
                 errorMsg = "Impossible de creer le XMP sidecar"
+                logError("Sidecar fallback failed: " .. tostring(sidecar)
+                    .. ", parentExists=" .. tostring(LrFileUtils.exists(LrPathUtils.parent(sidecar)))
+                    .. ", tempXmpExists=" .. tostring(LrFileUtils.exists(xmpPath)))
             end
         end
     end, { timeout = 30 })
 
+    if success then
+        logInfo("XMP applied successfully to " .. tostring(photoName))
+    else
+        logError("XMP apply failed for " .. tostring(photoName) .. ": " .. tostring(errorMsg))
+    end
     return success, errorMsg, xmpPath
 end
 
@@ -482,6 +696,7 @@ local function showMainDialog(photos)
         local prefs = getPrefs()
         local f     = LrView.osFactory()
         local props = LrBinding.makePropertyTable(context)
+        logInfo("Opening main dialog for " .. tostring(#photos) .. " selected photo(s)")
 
         props.mode         = prefs.lastMode or "prompt"
         props.prompt       = "Rends cette photo plus chaleureuse et dramatique"
@@ -490,6 +705,7 @@ local function showMainDialog(photos)
         props.apiKey       = prefs.apiKey
         props.serverUrl    = prefs.serverUrl
         props.showAdvanced = false
+        props.debugLogPath = prefs.debugLogPath ~= "" and prefs.debugLogPath or getDefaultDebugLogPath()
 
         local suggestions = {
             "Style cinematique : desaturation douce, ombres bleutees, hautes lumieres chaudes (teal & orange)",
@@ -506,6 +722,7 @@ local function showMainDialog(photos)
         end
 
         local function browseForRef()
+            logInfo("Opening file picker for reference image")
             local paths = LrDialogs.runOpenPanel {
                 title                   = "Choisir la photo modele",
                 canChooseFiles          = true,
@@ -516,6 +733,9 @@ local function showMainDialog(photos)
             }
             if paths and #paths > 0 then
                 props.refPath = paths[1]
+                logInfo("Reference image selected: " .. tostring(props.refPath))
+            else
+                logInfo("Reference image selection cancelled")
             end
         end
 
@@ -694,6 +914,15 @@ local function showMainDialog(photos)
                     f:static_text { title = "Cle API Claude :", width = 140 },
                     f:password_field { value = LrView.bind('apiKey'), width_in_chars = 35 },
                 },
+                f:separator { fill_horizontal = 1 },
+                f:row {
+                    f:static_text { title = "Fichier de log :", width = 140 },
+                    f:edit_field { value = LrView.bind('debugLogPath'), width_in_chars = 35 },
+                },
+                f:static_text {
+                    title = "Laissez vide pour utiliser : " .. getDefaultDebugLogPath(),
+                    font  = "<system/small>",
+                },
             },
         },
         }
@@ -704,6 +933,7 @@ local function showMainDialog(photos)
             actionVerb = "Analyser et Developper",
             cancelVerb = "Annuler",
         }
+        logInfo("Main dialog closed with result=" .. tostring(result))
 
         if result ~= 'ok' then return nil end
 
@@ -712,31 +942,44 @@ local function showMainDialog(photos)
         -- Validations
         if mode == "reference" or mode == "both" then
             if not props.refPath or props.refPath == "" then
+                logWarn("Validation failed: missing reference image")
                 LrDialogs.message("Erreur", "Selectionnez une photo modele.", "critical")
                 return nil
             end
             if not LrFileUtils.exists(props.refPath) then
+                logWarn("Validation failed: reference image missing on disk: " .. tostring(props.refPath))
                 LrDialogs.message("Erreur", "Photo modele introuvable :\n" .. props.refPath, "critical")
                 return nil
             end
         end
         if mode == "prompt" or mode == "both" then
             if not props.prompt or props.prompt:match("^%s*$") then
+                logWarn("Validation failed: empty prompt")
                 LrDialogs.message("Erreur", "Entrez des instructions.", "critical")
                 return nil
             end
         end
         if props.directApi and (not props.apiKey or props.apiKey == "") then
+            logWarn("Validation failed: missing API key")
             LrDialogs.message("Erreur", "Entrez votre cle API Claude.", "critical")
             return nil
         end
         if not props.directApi and not isValidServerUrl(props.serverUrl) then
+            logWarn("Validation failed: invalid server URL: " .. tostring(props.serverUrl))
             LrDialogs.message("Erreur",
                 "Entrez l'URL complete du serveur, par exemple :\nhttp://localhost:3000", "critical")
             return nil
         end
 
         props.serverUrl = normalizeServerUrl(props.serverUrl)
+        props.debugLogPath = normalizeDebugLogPath(props.debugLogPath)
+        logInfo("Dialog confirmed: mode=" .. tostring(mode)
+            .. ", directApi=" .. tostring(props.directApi)
+            .. ", serverUrl=" .. safeSnippet(props.serverUrl, 120)
+            .. ", hasApiKey=" .. tostring((props.apiKey or "") ~= "")
+            .. ", refPath=" .. safeSnippet(props.refPath, 180)
+            .. ", prompt=" .. safeSnippet(props.prompt, 180)
+            .. ", debugLogPath=" .. safeSnippet(props.debugLogPath ~= "" and props.debugLogPath or getDefaultDebugLogPath(), 220))
 
         savePrefs({
             apiKey      = props.apiKey,
@@ -744,6 +987,7 @@ local function showMainDialog(photos)
             directApi   = props.directApi,
             lastRefPath = props.refPath,
             lastMode    = mode,
+            debugLogPath = props.debugLogPath,
         })
 
         return {
@@ -753,6 +997,7 @@ local function showMainDialog(photos)
             directApi = props.directApi,
             apiKey    = props.apiKey,
             serverUrl = props.serverUrl,
+            debugLogPath = props.debugLogPath,
         }
     end)
 end
@@ -763,6 +1008,9 @@ end
 local function showResultDialog(xmpContent, xmpPath, mode)
     local f      = LrView.osFactory()
     local params = parseXmpToParams(xmpContent)
+    logInfo("Opening result dialog: mode=" .. tostring(mode)
+        .. ", xmpPath=" .. tostring(xmpPath)
+        .. ", xmpChars=" .. tostring(xmpContent and #xmpContent or 0))
 
     local priority = {
         "Exposure2012","Contrast2012","Highlights2012","Shadows2012",
@@ -828,6 +1076,12 @@ end
 local function processPhotos(photos, config)
     local tmpDir  = getTempDir()
     local results = { success = 0, failed = 0, errors = {} }
+    logInfo("Starting batch: count=" .. tostring(#photos)
+        .. ", mode=" .. tostring(config.mode)
+        .. ", directApi=" .. tostring(config.directApi)
+        .. ", serverUrl=" .. safeSnippet(config.serverUrl, 120)
+        .. ", hasApiKey=" .. tostring((config.apiKey or "") ~= "")
+        .. ", refPath=" .. safeSnippet(config.refPath, 180))
 
     -- Preparer la photo modele UNE SEULE FOIS pour tout le lot
     local refBase64 = nil
@@ -841,6 +1095,7 @@ local function processPhotos(photos, config)
         progress0:done()
 
         if not refJpeg then
+            logError("Reference preparation failed: " .. tostring(refErr))
             LrDialogs.message("Erreur — Photo modele",
                 "Impossible de convertir la photo modele :\n" .. (refErr or "?"), "critical")
             cleanTempDir(tmpDir)
@@ -849,6 +1104,7 @@ local function processPhotos(photos, config)
 
         local b64, encErr = fileToBase64(refJpeg)
         if not b64 then
+            logError("Reference encoding failed: " .. tostring(encErr))
             LrDialogs.message("Erreur — Photo modele",
                 "Impossible d'encoder la photo modele : " .. (encErr or "?"), "critical")
             cleanTempDir(tmpDir)
@@ -856,16 +1112,20 @@ local function processPhotos(photos, config)
         end
 
         refBase64 = b64
-        logger:info("Photo modele prete : " .. LrPathUtils.leafName(config.refPath) ..
+        logInfo("Reference ready: " .. LrPathUtils.leafName(config.refPath) ..
                     " (" .. #refBase64 .. " chars b64)")
     end
 
     local progress = LrProgressScope { title = "Claude Photo AI" }
 
     for i, photo in ipairs(photos) do
-        if progress:isCanceled() then break end
+        if progress:isCanceled() then
+            logWarn("Batch cancelled by user at item " .. tostring(i) .. "/" .. tostring(#photos))
+            break
+        end
 
         local photoName = LrPathUtils.leafName(photo:getRawMetadata('path'))
+        logInfo("Processing photo " .. tostring(i) .. "/" .. tostring(#photos) .. ": " .. tostring(photoName))
         progress:setPortionComplete(i - 1, #photos)
 
         repeat
@@ -873,6 +1133,7 @@ local function processPhotos(photos, config)
             progress:setCaption(string.format("[%d/%d] Export JPEG : %s", i, #photos, photoName))
             local jpegPath, exportErr = exportPhotoToJpeg(photo, tmpDir)
             if not jpegPath then
+                logError("Step export failed for " .. tostring(photoName) .. ": " .. tostring(exportErr))
                 table.insert(results.errors, photoName .. " : export echoue (" .. (exportErr or "?") .. ")")
                 results.failed = results.failed + 1
                 break
@@ -882,6 +1143,7 @@ local function processPhotos(photos, config)
             progress:setCaption(string.format("[%d/%d] Encodage : %s", i, #photos, photoName))
             local imageBase64, encErr = fileToBase64(jpegPath)
             if not imageBase64 then
+                logError("Step encode failed for " .. tostring(photoName) .. ": " .. tostring(encErr))
                 table.insert(results.errors, photoName .. " : encodage echoue (" .. (encErr or "?") .. ")")
                 results.failed = results.failed + 1
                 break
@@ -900,14 +1162,16 @@ local function processPhotos(photos, config)
             end
 
             if not xmpContent then
+                logError("Step API failed for " .. tostring(photoName) .. ": " .. tostring(apiErr))
                 table.insert(results.errors, photoName .. " : " .. (apiErr or "erreur API inconnue"))
                 results.failed = results.failed + 1
                 break
             end
+            logInfo("Received XMP for " .. tostring(photoName) .. ": " .. tostring(#xmpContent) .. " chars")
 
             -- Validation minimale
             if not isLikelyXmp(xmpContent) then
-                logger:error("Reponse non-XMP pour " .. photoName .. " : " .. xmpContent:sub(1, 400))
+                logError("Response is not valid XMP for " .. photoName .. ": " .. safeSnippet(xmpContent, 400))
                 table.insert(results.errors, photoName .. " : reponse invalide (XMP Lightroom non detecte)")
                 results.failed = results.failed + 1
                 break
@@ -918,6 +1182,7 @@ local function processPhotos(photos, config)
             local ok, applyErr, xmpPath = applyXmpToPhoto(photo, xmpContent, tmpDir)
 
             if ok then
+                logInfo("Photo processed successfully: " .. tostring(photoName) .. ", xmpPath=" .. tostring(xmpPath))
                 results.success = results.success + 1
                 if i == 1 then
                     local cap_xmp  = xmpContent
@@ -928,6 +1193,7 @@ local function processPhotos(photos, config)
                     end)
                 end
             else
+                logError("Apply step failed for " .. tostring(photoName) .. ": " .. tostring(applyErr))
                 table.insert(results.errors, photoName .. " : application echouee (" .. (applyErr or "?") .. ")")
                 results.failed = results.failed + 1
             end
@@ -935,6 +1201,7 @@ local function processPhotos(photos, config)
     end
 
     progress:done()
+    logInfo("Batch finished: success=" .. tostring(results.success) .. ", failed=" .. tostring(results.failed))
     cleanTempDir(tmpDir)
 
     if results.failed > 0 then
@@ -952,10 +1219,13 @@ end
 -- Point d'entree
 -- ============================================================
 LrTasks.startAsyncTask(function()
+    logInfo("Plugin task started")
     local catalog = LrApplication.activeCatalog()
     local photos  = catalog:getTargetPhotos()
+    logInfo("Selected photo count: " .. tostring(photos and #photos or 0))
 
     if not photos or #photos == 0 then
+        logWarn("No selected photo, aborting")
         LrDialogs.message(
             "Claude Photo AI",
             "Selectionnez au moins une photo dans Lightroom avant de lancer le plugin.",
@@ -964,7 +1234,10 @@ LrTasks.startAsyncTask(function()
     end
 
     local config = showMainDialog(photos)
-    if not config then return end
+    if not config then
+        logWarn("Dialog returned no config, aborting")
+        return
+    end
 
     processPhotos(photos, config)
 end)
